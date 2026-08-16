@@ -1,24 +1,20 @@
-import { memo } from "react";
-import { Badge } from "../ui/badge";
+import { memo, type ReactNode } from "react";
 
 export const ComposerPlanFollowUpBanner = memo(function ComposerPlanFollowUpBanner({
   planTitle,
+  trailing,
 }: {
   planTitle: string | null;
+  trailing?: ReactNode;
 }) {
   return (
-    <div className="px-4 py-3.5 sm:px-5 sm:py-4">
+    <div className="px-3 py-2 sm:px-4">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge
-          variant="info"
-          size="sm"
-          className="rounded-md px-1.5 py-0 font-semibold tracking-wide uppercase"
-        >
-          Plan Ready
-        </Badge>
+        <span className="text-sm font-medium text-foreground/90">Plan ready</span>
         {planTitle ? (
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">{planTitle}</span>
+          <span className="min-w-0 flex-1 truncate text-xs text-foreground/85">{planTitle}</span>
         ) : null}
+        {trailing}
       </div>
       {/* <div className="mt-2 text-xs text-muted-foreground">
         Review the plan

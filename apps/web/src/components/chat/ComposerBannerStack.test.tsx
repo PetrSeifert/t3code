@@ -49,10 +49,22 @@ describe("ComposerBannerStack", () => {
     const markup = renderToStaticMarkup(<ComposerBannerStack items={[banner("front")]} />);
 
     expect(markup).not.toContain("data-composer-banner-stack-expanded-items");
-    expect(markup).toContain("alert-glass");
+    expect(markup).toContain("chat-composer-drawer-surface");
+    expect(markup).toContain("chat-composer-drawer-attached");
+    expect(markup).toContain('data-composer-banner-drawer="true"');
     expect(markup).toContain('data-variant="warning"');
     expect(markup).toContain("transform:none");
     expect(markup).not.toContain("will-change:transform");
+  });
+
+  it("renders a detached banner when another composer status sits below it", () => {
+    const markup = renderToStaticMarkup(
+      <ComposerBannerStack attached={false} items={[banner("front")]} />,
+    );
+
+    expect(markup).toContain("alert-glass");
+    expect(markup).not.toContain("chat-composer-drawer-slot");
+    expect(markup).not.toContain("chat-composer-drawer-attached");
   });
 
   it("applies item-specific surface and action layout classes", () => {

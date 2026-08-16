@@ -29,6 +29,20 @@ export const ENVIRONMENT_RECONNECT_WARNING_GRACE_MS = 2_000;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 
+export function resolveComposerOwnsTopAttachment(input: {
+  hasPendingApproval: boolean;
+  pendingUserInputCount: number;
+  showPlanFollowUpPrompt: boolean;
+  hasActiveProposedPlan: boolean;
+  topDrawerVisible: boolean;
+}): boolean {
+  return (
+    input.hasPendingApproval ||
+    input.pendingUserInputCount > 0 ||
+    (input.showPlanFollowUpPrompt && input.hasActiveProposedPlan && input.topDrawerVisible)
+  );
+}
+
 export function scheduleEnvironmentReconnectWarning(showWarning: () => void): () => void {
   const timeoutId = globalThis.setTimeout(showWarning, ENVIRONMENT_RECONNECT_WARNING_GRACE_MS);
   return () => globalThis.clearTimeout(timeoutId);

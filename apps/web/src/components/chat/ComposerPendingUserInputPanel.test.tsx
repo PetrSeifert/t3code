@@ -1,4 +1,5 @@
 import { ApprovalRequestId } from "@t3tools/contracts";
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -22,7 +23,7 @@ const prompt: PendingUserInput = {
   ],
 };
 
-function renderPanel() {
+function renderPanel(trailing?: ReactNode) {
   return renderToStaticMarkup(
     <ComposerPendingUserInputPanel
       pendingUserInputs={[prompt]}
@@ -31,6 +32,7 @@ function renderPanel() {
       questionIndex={0}
       onToggleOption={() => {}}
       onAdvance={() => {}}
+      trailing={trailing}
     />,
   );
 }
@@ -57,5 +59,12 @@ describe("ComposerPendingUserInputPanel", () => {
     expect(markup).toContain("Which approach should the migration take?");
     expect(markup).toContain("Incremental");
     expect(markup).toContain("Big bang");
+  });
+
+  it("keeps a separate trailing action beside the disclosure control", () => {
+    const markup = renderPanel(<button data-stash-action="true">Stash</button>);
+
+    expect(markup).toContain('data-stash-action="true"');
+    expect(markup).toMatch(/<\/button><button data-stash-action="true">/);
   });
 });

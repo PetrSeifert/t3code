@@ -26,6 +26,7 @@ import {
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveComposerOwnsTopAttachment,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   scheduleEnvironmentReconnectWarning,
@@ -38,6 +39,41 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const threadId = ThreadId.make("thread-1");
 const now = "2026-03-29T00:00:00.000Z";
+
+describe("composer top attachment ownership", () => {
+  it("only detaches a ready plan when its drawer is visible", () => {
+    const readyPlan = {
+      hasPendingApproval: false,
+      pendingUserInputCount: 0,
+      showPlanFollowUpPrompt: true,
+      hasActiveProposedPlan: true,
+    };
+
+    expect(resolveComposerOwnsTopAttachment({ ...readyPlan, topDrawerVisible: false })).toBe(false);
+    expect(resolveComposerOwnsTopAttachment({ ...readyPlan, topDrawerVisible: true })).toBe(true);
+  });
+
+  it("keeps blocking interactions attached to their drawer", () => {
+    expect(
+      resolveComposerOwnsTopAttachment({
+        hasPendingApproval: true,
+        pendingUserInputCount: 0,
+        showPlanFollowUpPrompt: false,
+        hasActiveProposedPlan: false,
+        topDrawerVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      resolveComposerOwnsTopAttachment({
+        hasPendingApproval: false,
+        pendingUserInputCount: 1,
+        showPlanFollowUpPrompt: false,
+        hasActiveProposedPlan: false,
+        topDrawerVisible: false,
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("environment reconnect warning grace", () => {
   afterEach(() => vi.useRealTimers());

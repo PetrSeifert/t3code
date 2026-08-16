@@ -319,6 +319,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
+  resolveComposerOwnsTopAttachment,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
@@ -2318,6 +2319,16 @@ function ChatViewContent(props: ChatViewProps) {
     latestTurnSettled &&
     hasActionableProposedPlan(activeProposedPlan);
   const activePendingApproval = pendingApprovals[0] ?? null;
+  const [composerTopDrawerVisible, setComposerTopDrawerVisible] = useState(false);
+  const composerOwnsTopAttachment = resolveComposerOwnsTopAttachment({
+    hasPendingApproval: activePendingApproval !== null,
+    pendingUserInputCount: pendingUserInputs.length,
+    showPlanFollowUpPrompt,
+    hasActiveProposedPlan: activeProposedPlan !== null,
+    topDrawerVisible: composerTopDrawerVisible,
+  });
+  const composerBannerAttached =
+    (!threadSyncPhase || activeEnvironmentUnavailable) && !composerOwnsTopAttachment;
   const {
     beginLocalDispatch,
     resetLocalDispatch,
@@ -4457,19 +4468,20 @@ function ChatViewContent(props: ChatViewProps) {
       ),
       title: working
         ? liveCount > 0
-          ? `${liveCount} ${liveCount === 1 ? "agent" : "agents"} working in the background`
-          : "Background work running"
-        : "Monitoring in the background",
+          ? `${liveCount} ${liveCount === 1 ? "agent" : "agents"} working`
+          : "Background work"
+        : "Monitoring",
       actions: (
         <Button
-          size="xs"
-          variant="outline"
+          size="micro"
+          variant="ghost-muted"
           disabled={isStoppingBackgroundWork}
           onClick={() => void handleStopBackgroundWork()}
         >
           {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
         </Button>
       ),
+      className: "px-3 pt-1.5 text-xs",
     };
   }, [
     activeBackgroundLiveness,
@@ -4625,6 +4637,9 @@ function ChatViewContent(props: ChatViewProps) {
     systemComposerBannerItems,
     wokeThreadBannerItem,
   ]);
+  const composerExternalTopAttachmentOccupied =
+    (composerBannerAttached && composerBannerItems.length > 0) ||
+    Boolean(threadSyncPhase && !activeEnvironmentUnavailable && !composerOwnsTopAttachment);
 
   useEffect(() => {
     setPendingServerThreadEnvMode(null);
@@ -6397,13 +6412,24 @@ function ChatViewContent(props: ChatViewProps) {
                           activeProjectTitle={activeProject?.title ?? null}
                         />
                       </div>
-                      <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                      <ComposerBannerStack
+                        attached={composerBannerAttached}
+                        className="relative z-0"
+                        items={composerBannerItems}
+                      />
                     </div>
                   ) : (
-                    <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                    <ComposerBannerStack
+                      attached={composerBannerAttached}
+                      className="relative z-0"
+                      items={composerBannerItems}
+                    />
                   )}
                   {threadSyncPhase && !activeEnvironmentUnavailable ? (
-                    <ThreadSyncStatusPill phase={threadSyncPhase} />
+                    <ThreadSyncStatusPill
+                      attached={!composerOwnsTopAttachment}
+                      phase={threadSyncPhase}
+                    />
                   ) : null}
                   <div
                     className="relative"
@@ -6493,6 +6519,8 @@ function ChatViewContent(props: ChatViewProps) {
                             scheduleComposerFocus={scheduleComposerFocus}
                             setThreadError={setThreadError}
                             onExpandImage={onExpandTimelineImage}
+                            topAttachmentOccupied={composerExternalTopAttachmentOccupied}
+                            onTopDrawerVisibilityChange={setComposerTopDrawerVisible}
                           />
                         </div>
                       </div>
