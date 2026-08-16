@@ -138,6 +138,12 @@ describe("mergeUsage", () => {
       "claude",
       "codex",
     ]);
+    expect(merged.sessions).toBe(2);
+    expect(
+      Object.fromEntries(
+        merged.providers.map((provider) => [provider.provider, provider.sessions]),
+      ),
+    ).toEqual({ claude: 1, codex: 1 });
   });
 
   it("excludes an environment reporting an older contract version", () => {
@@ -248,6 +254,31 @@ describe("mergeUsage", () => {
     );
 
     expect(merged.sessions).toBe(1);
+    expect(merged.providers[0]?.sessions).toBe(1);
+  });
+
+  it("omits providers whose owned sources have no activity", () => {
+    const merged = mergeUsage(
+      [
+        environment(
+          "env-a",
+          summary(
+            [],
+            [
+              {
+                provider: "claude",
+                hostId: "mac",
+                homePath: "/a/.claude",
+                distinctSessions: 0,
+              },
+            ],
+          ),
+        ),
+      ],
+      USAGE_CONTRACT_VERSION,
+    );
+
+    expect(merged.providers).toEqual([]);
   });
 
   it("returns empty totals with no environments", () => {

@@ -52,3 +52,11 @@ export function WorkspacePageHeader({
     />
   );
 }
+
+/** Keeps an icon glyph on the content edge while its larger hit target extends outward. */
+export function WorkspacePageHeaderEdgeControl({
+  className,
+  ...props
+}: ComponentPropsWithoutRef<"div">) {
+  return <div className={cn("-me-[7px] flex shrink-0", className)} {...props} />;
+}
