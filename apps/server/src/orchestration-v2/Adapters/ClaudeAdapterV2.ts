@@ -2265,6 +2265,7 @@ export function shouldReopenClaudeSubagentActivation(input: {
 interface ActiveClaudeSubagent {
   task: OrchestrationV2Subagent;
   activation: OrchestrationV2SubagentActivation;
+  readonly recoveredFromProjection: boolean;
   readonly rootNodeId: OrchestrationV2ExecutionNode["id"];
   readonly childThreadId: ThreadId;
   readonly childRootNodeId: OrchestrationV2ExecutionNode["id"];
@@ -3180,6 +3181,7 @@ export function makeClaudeAdapterV2(
           const subagent = {
             task,
             activation,
+            recoveredFromProjection: false,
             rootNodeId,
             childThreadId,
             childRootNodeId,
@@ -3218,7 +3220,6 @@ export function makeClaudeAdapterV2(
 
           if (
             isReopen &&
-            !wasSettled &&
             existingSubagent !== undefined &&
             (existingSubagent.activation.status === "pending" ||
               existingSubagent.activation.status === "running" ||
@@ -3229,7 +3230,7 @@ export function makeClaudeAdapterV2(
               driver: CLAUDE_PROVIDER,
               activation: {
                 ...existingSubagent.activation,
-                status: "failed",
+                status: existingSubagent.recoveredFromProjection ? "interrupted" : "failed",
                 completedAt: existingSubagent.activation.completedAt ?? now,
                 updatedAt: now,
               },
@@ -3540,21 +3541,26 @@ export function makeClaudeAdapterV2(
               const activationOrdinal = Math.max(1, task.activationCount);
               const activationStatus =
                 taskStatus === "idle" ? ("interrupted" as const) : taskStatus;
+              const activation =
+                entry.latestActivation !== undefined && entry.latestActivation !== null
+                  ? entry.latestActivation
+                  : ({
+                      id: subagentActivationId(task.id, activationOrdinal),
+                      threadId: task.threadId,
+                      subagentId: task.id,
+                      runId: task.runId,
+                      providerTurnId: null,
+                      ordinal: activationOrdinal,
+                      status: activationStatus,
+                      usage: null,
+                      startedAt: task.startedAt,
+                      completedAt: task.completedAt,
+                      updatedAt: task.updatedAt,
+                    } satisfies OrchestrationV2SubagentActivation);
               const seeded = {
                 task,
-                activation: {
-                  id: subagentActivationId(task.id, activationOrdinal),
-                  threadId: task.threadId,
-                  subagentId: task.id,
-                  runId: task.runId,
-                  providerTurnId: null,
-                  ordinal: activationOrdinal,
-                  status: activationStatus,
-                  usage: null,
-                  startedAt: task.startedAt,
-                  completedAt: task.completedAt,
-                  updatedAt: task.updatedAt,
-                },
+                activation,
+                recoveredFromProjection: true,
                 rootNodeId: rootNodeIdFor(task),
                 childThreadId: entry.childThread.id,
                 childRootNodeId: idAllocator.derive.nodeFromProviderItem({
