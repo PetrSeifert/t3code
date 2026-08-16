@@ -4,7 +4,6 @@ import {
   changedFileName,
   selectChangedFilePreview,
   shouldAutoExpandChangedFiles,
-  summarizeChangedFileScopes,
 } from "./changedFilesPresentation";
 
 describe("changed-files presentation", () => {
@@ -33,22 +32,6 @@ describe("changed-files presentation", () => {
         true,
       ),
     ).toBe(false);
-  });
-
-  it("summarizes the most prominent top-level scopes", () => {
-    const files = [
-      { path: "apps/web/src/App.tsx", kind: "modified", additions: 1, deletions: 0 },
-      { path: "README.md", kind: "modified", additions: 1, deletions: 0 },
-      { path: "apps/server/src/index.ts", kind: "modified", additions: 1, deletions: 0 },
-      { path: "packages/shared/src/git.ts", kind: "modified", additions: 1, deletions: 0 },
-      { path: "apps\\mobile\\App.tsx", kind: "modified", additions: 1, deletions: 0 },
-    ];
-
-    expect(summarizeChangedFileScopes(files)).toEqual([
-      { label: "apps", fileCount: 3 },
-      { label: "root", fileCount: 1 },
-      { label: "packages", fileCount: 1 },
-    ]);
   });
 
   it("previews files across different scopes before filling from one scope", () => {

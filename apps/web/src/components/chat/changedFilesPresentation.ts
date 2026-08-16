@@ -4,12 +4,6 @@ import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 export const CHANGED_FILES_AUTO_EXPAND_FILE_LIMIT = 5;
 export const CHANGED_FILES_AUTO_EXPAND_LINE_LIMIT = 200;
 export const CHANGED_FILES_PREVIEW_FILE_LIMIT = 3;
-export const CHANGED_FILES_PREVIEW_SCOPE_LIMIT = 4;
-
-export interface ChangedFilesScopeSummary {
-  readonly label: string;
-  readonly fileCount: number;
-}
 
 function pathSegments(pathValue: string): string[] {
   return pathValue
@@ -36,35 +30,6 @@ export function shouldAutoExpandChangedFiles(
   }
   const stat = summarizeTurnDiffStats(files);
   return stat.additions + stat.deletions <= CHANGED_FILES_AUTO_EXPAND_LINE_LIMIT;
-}
-
-export function summarizeChangedFileScopes(
-  files: ReadonlyArray<TurnDiffFileChange>,
-  limit = CHANGED_FILES_PREVIEW_SCOPE_LIMIT,
-): ChangedFilesScopeSummary[] {
-  const scopes = new Map<string, { fileCount: number; firstIndex: number }>();
-  files.forEach((file, index) => {
-    const label = changedFileScope(file.path);
-    const current = scopes.get(label);
-    scopes.set(label, {
-      fileCount: (current?.fileCount ?? 0) + 1,
-      firstIndex: current?.firstIndex ?? index,
-    });
-  });
-
-  return Array.from(scopes, ([label, scope]) => ({
-    label,
-    fileCount: scope.fileCount,
-    firstIndex: scope.firstIndex,
-  }))
-    .toSorted(
-      (left, right) =>
-        right.fileCount - left.fileCount ||
-        left.firstIndex - right.firstIndex ||
-        left.label.localeCompare(right.label),
-    )
-    .slice(0, limit)
-    .map(({ label, fileCount }) => ({ label, fileCount }));
 }
 
 export function selectChangedFilePreview(

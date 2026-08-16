@@ -176,7 +176,6 @@ const MESSAGE_CREATED_AT = "2026-03-17T19:12:28.000Z";
 function buildProps() {
   return {
     isWorking: false,
-    activeTurnInProgress: false,
     activeTurnStartedAt: null,
     listRef: createRef<LegendListRef | null>(),
     latestTurn: null,
@@ -237,6 +236,51 @@ function buildAssistantTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("sizes the subagent card from its own container", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[
+          {
+            id: "agent-spawn-entry",
+            kind: "work",
+            createdAt: MESSAGE_CREATED_AT,
+            entry: {
+              id: "agent-spawn",
+              createdAt: MESSAGE_CREATED_AT,
+              label: "Spawned agent",
+              tone: "info",
+              agentSpawn: { workflowId: null, agentTaskIds: ["agent-1"] },
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("@container/agent-group");
+    expect(markup).toContain("@[24rem]/agent-group:inline");
+    expect(markup).toContain("@[32rem]/agent-group:flex");
+    expect(markup).toContain("sr-only @[32rem]/agent-group:hidden");
+  });
+
+  it("keeps the active plan step in the live thinking row", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        isWorking
+        workingStepLabel="Write focused tests"
+        timelineEntries={[]}
+      />,
+    );
+
+    expect(markup).toContain("Thinking · Write focused tests");
+    expect(markup).toContain('aria-hidden="true" class="size-6 shrink-0"');
+    expect(markup).toContain(
+      'class="pb-2" data-timeline-row-id="working-indicator-row" data-timeline-row-kind="working"',
+    );
+    expect(markup).toContain("text-secondary-label tabular-nums");
+  });
+
   it("uses the larger leading inset only when the top fade is enabled", () => {
     const timelineEntries = [buildUserTimelineEntry("Hello")];
 
@@ -700,7 +744,141 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Work Log");
   });
 
-  it("formats changed file paths from the workspace root", () => {
+  it("makes the whole live tool row expandable without adding a chevron", () => {
+    const turnId = TurnId.make("turn-live-tools");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        isWorking
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        latestTurn={{
+          turnId,
+          state: "running",
+          startedAt: "2026-03-17T19:12:28.000Z",
+          completedAt: null,
+        }}
+        runningTurnId={turnId}
+        timelineEntries={[
+          {
+            id: "entry-live-tool",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "work-live-tool",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              turnId,
+              toolCallId: "call-live-tool",
+              label: "Running tests",
+              command: 'FOO="hello world" /usr/bin/env -C /tmp /usr/bin/sudo -iu postgres psql',
+              tone: "tool",
+              toolLifecycleStatus: "inProgress",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).not.toContain('aria-label="Expand current tool calls"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain("Running psql");
+    expect(markup).not.toContain("lucide-chevron-right");
+    expect(markup).not.toContain("lucide-chevron-down");
+    expect(markup).not.toContain("hover:bg-accent/20");
+    expect(markup).not.toContain("Tool call failed");
+  });
+
+  it("uses the read icon for a live dynamic Read File call", () => {
+    const turnId = TurnId.make("turn-live-read-file");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        isWorking
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        latestTurn={{
+          turnId,
+          state: "running",
+          startedAt: "2026-03-17T19:12:28.000Z",
+          completedAt: null,
+        }}
+        runningTurnId={turnId}
+        timelineEntries={[
+          {
+            id: "entry-live-read-file",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "work-live-read-file",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              turnId,
+              toolCallId: "call-live-read-file",
+              label: "Read File",
+              toolTitle: "Read File",
+              tone: "tool",
+              itemType: "dynamic_tool_call",
+              toolLifecycleStatus: "inProgress",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain("lucide-eye");
+    expect(markup).not.toContain("lucide-hammer");
+  });
+
+  it("marks a failed tool that remains in the live row", () => {
+    const turnId = TurnId.make("turn-failed-live-tool");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        isWorking
+        activeTurnStartedAt="2026-03-17T19:12:28.000Z"
+        latestTurn={{
+          turnId,
+          state: "running",
+          startedAt: "2026-03-17T19:12:28.000Z",
+          completedAt: null,
+        }}
+        runningTurnId={turnId}
+        timelineEntries={[
+          {
+            id: "entry-pending-live-tool",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.500Z",
+            entry: {
+              id: "work-pending-live-tool",
+              createdAt: "2026-03-17T19:12:28.500Z",
+              turnId,
+              toolCallId: "call-pending-live-tool",
+              label: "Read",
+              tone: "tool",
+            },
+          },
+          {
+            id: "entry-failed-live-tool",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "work-failed-live-tool",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              turnId,
+              toolCallId: "call-failed-live-tool",
+              label: "Glob",
+              tone: "tool",
+              toolLifecycleStatus: "failed",
+            },
+          },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Glob, tool call failed"');
+    expect(markup).toContain('aria-label="Tool call failed"');
+    expect(markup).toContain("lucide-x");
+    expect(markup).toContain("text-destructive");
+  });
+
+  it("summarizes completed changed-file activity", () => {
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -722,7 +900,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("t3code/apps/web/src/session-logic.ts");
+    expect(markup).toContain("Changed 1 file");
     expect(markup).not.toContain("C:/Users/mike/dev-stuff/t3code/apps/web/src/session-logic.ts");
   });
 
@@ -826,6 +1004,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("lucide-x");
+    expect(markup).toContain('aria-label="Used 1 tool, tool call failed"');
+    expect(markup).toContain('role="img"');
     expect(markup).toContain('aria-label="Tool call failed"');
   });
 });
