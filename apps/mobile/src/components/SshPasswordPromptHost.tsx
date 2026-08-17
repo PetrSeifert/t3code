@@ -1,73 +1,35 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Modal, Pressable, View } from "react-native";
 
 import type { SourceControlSshPasswordPromptRequest } from "@t3tools/contracts";
 
 import { useThemeColor } from "../lib/useThemeColor";
 import { AppText, AppTextInput } from "./AppText";
-
-type PendingSshPasswordPrompt = {
-  readonly request: SourceControlSshPasswordPromptRequest;
-  readonly resolve: (password: string | null) => void;
-};
-
-let presentPrompt: ((prompt: PendingSshPasswordPrompt) => void) | null = null;
-let cancelPrompt: (() => void) | null = null;
-
-export function requestSshPassword(
-  request: SourceControlSshPasswordPromptRequest,
-): Promise<string | null> {
-  return new Promise((resolve) => {
-    if (presentPrompt === null) {
-      resolve(null);
-      return;
-    }
-    presentPrompt({ request, resolve });
-  });
-}
-
-export function cancelSshPasswordPrompt(): void {
-  cancelPrompt?.();
-}
+import { sshPasswordPromptBroker } from "./sshPasswordPromptBroker";
 
 export function SshPasswordPromptHost() {
-  const [prompt, setPrompt] = useState<PendingSshPasswordPrompt | null>(null);
+  const [prompt, setPrompt] = useState<SourceControlSshPasswordPromptRequest | null>(null);
   const [password, setPassword] = useState("");
-  const promptRef = useRef<PendingSshPasswordPrompt | null>(null);
   const pressedOverlay = useThemeColor("--color-subtle");
 
-  useEffect(() => {
-    presentPrompt = (nextPrompt) => {
-      promptRef.current?.resolve(null);
-      promptRef.current = nextPrompt;
-      setPassword("");
-      setPrompt(nextPrompt);
-    };
-    return () => {
-      presentPrompt = null;
-      promptRef.current?.resolve(null);
-      promptRef.current = null;
-    };
-  }, []);
+  useEffect(
+    () =>
+      sshPasswordPromptBroker.subscribe((nextPrompt) => {
+        setPassword("");
+        setPrompt(nextPrompt);
+      }),
+    [],
+  );
 
-  const finish = useCallback((value: string | null) => {
-    const currentPrompt = promptRef.current;
-    promptRef.current = null;
-    setPrompt(null);
-    setPassword("");
-    currentPrompt?.resolve(value);
+  const finish = useCallback((requestId: string, value: string | null) => {
+    sshPasswordPromptBroker.resolveCurrent(requestId, value);
   }, []);
 
   const submit = useCallback(() => {
-    if (password.length > 0) finish(password);
-  }, [finish, password]);
-
-  useEffect(() => {
-    cancelPrompt = () => finish(null);
-    return () => {
-      cancelPrompt = null;
-    };
-  }, [finish]);
+    if (prompt !== null && password.length > 0) {
+      finish(prompt.requestId, password);
+    }
+  }, [finish, password, prompt]);
 
   return (
     <Modal
@@ -76,15 +38,18 @@ export function SshPasswordPromptHost() {
       animationType="fade"
       statusBarTranslucent
       navigationBarTranslucent
-      onRequestClose={() => finish(null)}
+      onRequestClose={() => {
+        if (prompt !== null) {
+          finish(prompt.requestId, null);
+        }
+      }}
     >
       {prompt === null ? null : (
         <View className="flex-1 items-center justify-center bg-backdrop px-8">
           <View className="w-full rounded-[24px] bg-card px-6 pb-4 pt-5">
             <AppText className="text-lg font-t3-medium">SSH password required</AppText>
             <AppText className="mt-2 text-sm text-foreground-secondary">
-              Enter the password for {prompt.request.username ?? "SSH"} at{" "}
-              {prompt.request.destination}.
+              Enter the password for {prompt.username ?? "SSH"} at {prompt.destination}.
             </AppText>
             <AppTextInput
               autoFocus
@@ -104,7 +69,7 @@ export function SshPasswordPromptHost() {
                   accessibilityRole="button"
                   className="min-h-10 items-center justify-center px-4"
                   android_ripple={{ color: pressedOverlay }}
-                  onPress={() => finish(null)}
+                  onPress={() => finish(prompt.requestId, null)}
                 >
                   <AppText className="text-base font-t3-medium">Cancel</AppText>
                 </Pressable>
