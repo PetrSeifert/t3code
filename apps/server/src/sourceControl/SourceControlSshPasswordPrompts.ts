@@ -3,10 +3,12 @@ import type {
   SourceControlSshPasswordPromptResolutionInput,
 } from "@t3tools/contracts";
 import { SshPasswordPrompt, type SshPasswordRequest } from "@t3tools/ssh/auth";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
@@ -19,6 +21,16 @@ interface PendingPrompt {
 export interface SourceControlSshPasswordPromptsOptions {
   readonly promptTimeoutMs?: number;
 }
+
+export class SourceControlSshPasswordPrompts extends Context.Service<
+  SourceControlSshPasswordPrompts,
+  {
+    readonly makePrompt: (
+      publish: (request: SourceControlSshPasswordPromptRequest) => Effect.Effect<void>,
+    ) => SshPasswordPrompt["Service"];
+    readonly resolve: (input: SourceControlSshPasswordPromptResolutionInput) => Effect.Effect<void>;
+  }
+>()("t3/sourceControl/SourceControlSshPasswordPrompts") {}
 
 export const make = Effect.fn("SourceControlSshPasswordPrompts.make")(function* (
   options: SourceControlSshPasswordPromptsOptions = {},
@@ -78,8 +90,10 @@ export const make = Effect.fn("SourceControlSshPasswordPrompts.make")(function* 
         }),
     });
 
-  return {
+  return SourceControlSshPasswordPrompts.of({
     makePrompt,
     resolve,
-  } as const;
+  });
 });
+
+export const layer = Layer.effect(SourceControlSshPasswordPrompts, make());
