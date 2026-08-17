@@ -418,7 +418,8 @@ const makeWsRpcLayer = (
       );
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
-      const sourceControlSshPasswordPrompts = yield* SourceControlSshPasswordPrompts.make();
+      const sourceControlSshPasswordPrompts =
+        yield* SourceControlSshPasswordPrompts.SourceControlSshPasswordPrompts;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
@@ -2423,7 +2424,7 @@ const makeWsRpcLayer = (
           ),
       });
     }),
-  );
+  ).pipe(Layer.provide(SourceControlSshPasswordPrompts.layer));
 
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
