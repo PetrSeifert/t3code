@@ -44,6 +44,8 @@ import {
   type RelayClientInstallProgressEvent,
   type ServerSelfUpdateError,
   type ServerSelfUpdateProgressEvent,
+  type SourceControlPublishRepositoryEvent,
+  type SourceControlRepositoryError,
   type FilesystemBrowseFailure,
   FilesystemBrowseError,
   AssetWorkspaceContextNotFoundError,
@@ -59,6 +61,7 @@ import {
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import { SshPasswordPrompt } from "@t3tools/ssh/auth";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
@@ -111,6 +114,7 @@ import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as SourceControlSshPasswordPrompts from "./sourceControl/SourceControlSshPasswordPrompts.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
@@ -411,6 +415,7 @@ const makeWsRpcLayer = (
       );
       const sourceControlRepositories =
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      const sourceControlSshPasswordPrompts = yield* SourceControlSshPasswordPrompts.make();
       const pullRequests = yield* PullRequestService.PullRequestService;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
@@ -1754,6 +1759,40 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "source-control",
             },
+          ),
+        [WS_METHODS.sourceControlPublishRepositoryWithPrompts]: (input) =>
+          observeRpcStream(
+            WS_METHODS.sourceControlPublishRepositoryWithPrompts,
+            Stream.callback<SourceControlPublishRepositoryEvent, SourceControlRepositoryError>(
+              (queue) => {
+                const prompt = sourceControlSshPasswordPrompts.makePrompt((request) =>
+                  Queue.offer(queue, {
+                    _tag: "ssh_password_prompt",
+                    request,
+                  }).pipe(Effect.asVoid),
+                );
+                return sourceControlRepositories.publishRepository(input).pipe(
+                  Effect.provideService(SshPasswordPrompt, prompt),
+                  Effect.tap(() => refreshGitStatus(input.cwd)),
+                  Effect.flatMap((result) =>
+                    Queue.offer(queue, {
+                      _tag: "complete",
+                      result,
+                    }),
+                  ),
+                  Effect.andThen(Queue.end(queue)),
+                  Effect.catchCause((cause) => Queue.failCause(queue, cause)),
+                  Effect.forkScoped,
+                );
+              },
+            ),
+            { "rpc.aggregate": "source-control" },
+          ),
+        [WS_METHODS.sourceControlResolveSshPasswordPrompt]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.sourceControlResolveSshPasswordPrompt,
+            sourceControlSshPasswordPrompts.resolve(input),
+            { "rpc.aggregate": "source-control" },
           ),
         [WS_METHODS.projectsSearchEntries]: (input) =>
           observeRpcEffect(

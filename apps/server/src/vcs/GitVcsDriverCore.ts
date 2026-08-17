@@ -27,8 +27,15 @@ import {
   type VcsRef,
 } from "@t3tools/contracts";
 import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3tools/shared/git";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import {
+  buildSshChildEnvironment,
+  getDefaultSshAskpassDirectory,
+  isSshAuthFailure,
+  SshPasswordPrompt,
+} from "@t3tools/ssh/auth";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 import {
@@ -146,6 +153,7 @@ interface ExecuteGitOptions {
   maxOutputBytes?: number | undefined;
   appendTruncationMarker?: boolean | undefined;
   progress?: GitVcsDriver.ExecuteGitProgress | undefined;
+  sshAuthentication?: GitVcsDriver.GitPushOptions["sshAuthentication"] | undefined;
 }
 
 function parseBranchAb(value: string): { ahead: number; behind: number } {
@@ -705,6 +713,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const { worktreesDir } = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
+  const hostPlatform = yield* HostProcessPlatform;
+  const sshAskpassDirectory = yield* Effect.cached(
+    getDefaultSshAskpassDirectory().pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    ),
+  );
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
     function* (input) {
@@ -855,6 +870,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
 
+  const ensureSuccessfulGitResult = (
+    operation: string,
+    cwd: string,
+    args: readonly string[],
+    options: ExecuteGitOptions,
+    result: GitVcsDriver.ExecuteGitResult,
+  ): Effect.Effect<GitVcsDriver.ExecuteGitResult, GitCommandError> => {
+    if (options.allowNonZeroExit || result.exitCode === 0) {
+      return Effect.succeed(result);
+    }
+    return Effect.fail(
+      new GitCommandError({
+        ...gitCommandContext({ operation, cwd, args }),
+        detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
+        ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
+        stdoutLength: result.stdout.length,
+        stderrLength: result.stderr.length,
+      }),
+    );
+  };
+
   const executeGit = (
     operation: string,
     cwd: string,
@@ -875,21 +911,100 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         : {}),
       ...(options.progress ? { progress: options.progress } : {}),
     }).pipe(
-      Effect.flatMap((result) => {
-        if (options.allowNonZeroExit || result.exitCode === 0) {
-          return Effect.succeed(result);
-        }
-        return Effect.fail(
-          new GitCommandError({
-            ...gitCommandContext({ operation, cwd, args }),
-            detail: options.fallbackErrorDetail ?? "Git command exited with a non-zero status.",
-            ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
-            stdoutLength: result.stdout.length,
-            stderrLength: result.stderr.length,
-          }),
-        );
-      }),
+      Effect.flatMap((result) => ensureSuccessfulGitResult(operation, cwd, args, options, result)),
     );
+
+  const executeGitWithSshAuthentication = Effect.fn("GitVcsDriver.executeGitWithSshAuthentication")(
+    function* (
+      operation: string,
+      cwd: string,
+      args: readonly string[],
+      options: ExecuteGitOptions & {
+        readonly sshAuthentication: NonNullable<ExecuteGitOptions["sshAuthentication"]>;
+      },
+    ) {
+      const prompt = Option.getOrElse(yield* Effect.serviceOption(SshPasswordPrompt), () =>
+        SshPasswordPrompt.of({
+          isAvailable: false,
+          request: () => Effect.succeed(null),
+        }),
+      );
+      let authSecret: string | null = null;
+      let promptCount = 0;
+
+      while (true) {
+        const askpassDirectory = yield* sshAskpassDirectory.pipe(
+          Effect.mapError(
+            (cause) =>
+              new GitCommandError({
+                ...gitCommandContext({ operation, cwd, args }),
+                detail: "Failed to prepare SSH authentication.",
+                cause,
+              }),
+          ),
+        );
+        const env = yield* buildSshChildEnvironment({
+          interactiveAuth: true,
+          authSecret,
+          askpassDirectory,
+          baseEnv: {
+            ...options.env,
+            GIT_TERMINAL_PROMPT: "0",
+          },
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+          Effect.provideService(HostProcessPlatform, hostPlatform),
+          Effect.mapError(
+            (cause) =>
+              new GitCommandError({
+                ...gitCommandContext({ operation, cwd, args }),
+                detail: "Failed to prepare SSH authentication.",
+                cause,
+              }),
+          ),
+        );
+        const result = yield* executeGit(operation, cwd, args, {
+          ...options,
+          env,
+          allowNonZeroExit: true,
+          sshAuthentication: undefined,
+        });
+        if (result.exitCode === 0) {
+          return result;
+        }
+        if (!isSshAuthFailure(result.stderr) || !prompt.isAvailable || promptCount >= 2) {
+          return yield* ensureSuccessfulGitResult(operation, cwd, args, options, result);
+        }
+
+        promptCount += 1;
+        const nextAuthSecret = yield* prompt
+          .request({
+            destination: options.sshAuthentication.destination,
+            username: options.sshAuthentication.username ?? null,
+            prompt: `Enter the SSH key passphrase or password for ${options.sshAuthentication.destination}.`,
+            attempt: promptCount,
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new GitCommandError({
+                  ...gitCommandContext({ operation, cwd, args }),
+                  detail: "SSH authentication could not be completed.",
+                  cause,
+                }),
+            ),
+          );
+        if (nextAuthSecret === null) {
+          return yield* new GitCommandError({
+            ...gitCommandContext({ operation, cwd, args }),
+            detail: "SSH authentication was cancelled.",
+          });
+        }
+        authSecret = nextAuthSecret;
+      }
+    },
+  );
 
   const executeGitWithStableDiagnostics = (
     operation: string,
@@ -911,7 +1026,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     args: readonly string[],
     options: ExecuteGitOptions = {},
   ): Effect.Effect<void, GitCommandError> =>
-    executeGit(operation, cwd, args, options).pipe(Effect.asVoid);
+    (options.sshAuthentication
+      ? executeGitWithSshAuthentication(operation, cwd, args, {
+          ...options,
+          sshAuthentication: options.sshAuthentication,
+        })
+      : executeGit(operation, cwd, args, options)
+    ).pipe(Effect.asVoid);
 
   const runGitStdout = (
     operation: string,
@@ -1913,7 +2034,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote",
         cwd,
         ["push", "-u", requestedRemoteName, `HEAD:refs/heads/${publishBranch}`],
-        { timeoutMs: null },
+        { timeoutMs: null, sshAuthentication: options?.sshAuthentication },
       );
       return {
         status: "pushed" as const,
@@ -1976,7 +2097,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "GitVcsDriver.pushCurrentBranch.pushWithUpstream",
         cwd,
         ["push", "-u", publishRemoteName, `HEAD:refs/heads/${publishBranch}`],
-        { timeoutMs: null },
+        { timeoutMs: null, sshAuthentication: options?.sshAuthentication },
       );
       return {
         status: "pushed" as const,
@@ -1994,7 +2115,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         "GitVcsDriver.pushCurrentBranch.pushUpstream",
         cwd,
         ["push", currentUpstream.remoteName, `HEAD:refs/heads/${currentUpstream.branchName}`],
-        { timeoutMs: null },
+        { timeoutMs: null, sshAuthentication: options?.sshAuthentication },
       );
       return {
         status: "pushed" as const,
@@ -2004,7 +2125,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       };
     }
 
-    yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, ["push"], { timeoutMs: null });
+    yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, ["push"], {
+      timeoutMs: null,
+      sshAuthentication: options?.sshAuthentication,
+    });
     return {
       status: "pushed" as const,
       branch,

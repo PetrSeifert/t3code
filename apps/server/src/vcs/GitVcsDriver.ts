@@ -122,6 +122,14 @@ export interface GitPushResult {
   setUpstream?: boolean | undefined;
 }
 
+export interface GitPushOptions {
+  readonly remoteName?: string | null;
+  readonly sshAuthentication?: {
+    readonly destination: string;
+    readonly username?: string | null;
+  };
+}
+
 export interface GitRangeContext {
   commitSummary: string;
   diffSummary: string;
@@ -249,7 +257,7 @@ export class GitVcsDriver extends Context.Service<
     readonly pushCurrentBranch: (
       cwd: string,
       fallbackBranch: string | null,
-      options?: { readonly remoteName?: string | null },
+      options?: GitPushOptions,
     ) => Effect.Effect<GitPushResult, GitCommandError>;
     readonly readRangeContext: (
       cwd: string,

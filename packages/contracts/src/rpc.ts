@@ -185,11 +185,13 @@ import {
   SourceControlCloneRepositoryInput,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
+  SourceControlPublishRepositoryEvent,
   SourceControlPublishRepositoryInput,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryError,
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
+  SourceControlSshPasswordPromptResolutionInput,
 } from "./sourceControl.ts";
 import { VcsError } from "./vcs.ts";
 
@@ -301,6 +303,8 @@ export const WS_METHODS = {
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
+  sourceControlPublishRepositoryWithPrompts: "sourceControl.publishRepositoryWithPrompts",
+  sourceControlResolveSshPasswordPrompt: "sourceControl.resolveSshPasswordPrompt",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -615,6 +619,25 @@ export const WsSourceControlPublishRepositoryRpc = Rpc.make(
     payload: SourceControlPublishRepositoryInput,
     success: SourceControlPublishRepositoryResult,
     error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsSourceControlPublishRepositoryWithPromptsRpc = Rpc.make(
+  WS_METHODS.sourceControlPublishRepositoryWithPrompts,
+  {
+    payload: SourceControlPublishRepositoryInput,
+    success: SourceControlPublishRepositoryEvent,
+    error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
+export const WsSourceControlResolveSshPasswordPromptRpc = Rpc.make(
+  WS_METHODS.sourceControlResolveSshPasswordPrompt,
+  {
+    payload: SourceControlSshPasswordPromptResolutionInput,
+    success: Schema.Void,
+    error: EnvironmentAuthorizationError,
   },
 );
 
@@ -1026,6 +1049,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
+  WsSourceControlPublishRepositoryWithPromptsRpc,
+  WsSourceControlResolveSshPasswordPromptRpc,
   WsProjectsListEntriesRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
