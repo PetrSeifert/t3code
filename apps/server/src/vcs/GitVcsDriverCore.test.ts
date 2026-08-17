@@ -15,6 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
+import { SshPasswordPrompt } from "@t3tools/ssh/auth";
 import { ServerConfig } from "../config.ts";
 import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -52,6 +53,21 @@ const makeSuccessfulHandle = (stdout: string) =>
     stdin: Sink.drain,
     stdout: Stream.encodeText(Stream.make(stdout)),
     stderr: Stream.empty,
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+
+const makeFailedHandle = (stderr: string) =>
+  ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(128)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    unref: Effect.succeed(Effect.void),
+    stdin: Sink.drain,
+    stdout: Stream.empty,
+    stderr: Stream.encodeText(Stream.make(stderr)),
     all: Stream.empty,
     getInputFd: () => Sink.drain,
     getOutputFd: () => Stream.empty,
@@ -1608,6 +1624,63 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           status: "skipped_up_to_date",
           branch: "feature/push",
         });
+      }),
+    );
+
+    it.effect("asks for an SSH secret and retries the push through askpass", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["remote", "add", "origin", "git@github.com:octocat/t3code.git"]);
+
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const pushEnvironments: NodeJS.ProcessEnv[] = [];
+        const promptedAttempts: number[] = [];
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (!ChildProcess.isStandardCommand(command) || command.args[0] !== "push") {
+            return delegate.spawn(command);
+          }
+
+          const environment = command.options.env ?? {};
+          pushEnvironments.push(environment);
+          return Effect.succeed(
+            environment.T3_SSH_AUTH_SECRET === "correct horse battery staple"
+              ? makeSuccessfulHandle("")
+              : makeFailedHandle("git@github.com: Permission denied (publickey)."),
+          );
+        });
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ServerConfigLayer),
+        );
+        const prompt = SshPasswordPrompt.of({
+          isAvailable: true,
+          request: (request) =>
+            Effect.sync(() => {
+              promptedAttempts.push(request.attempt);
+              return "correct horse battery staple";
+            }),
+        });
+
+        const result = yield* driver
+          .pushCurrentBranch(cwd, null, {
+            remoteName: "origin",
+            sshAuthentication: {
+              destination: "git@github.com:octocat/t3code.git",
+            },
+          })
+          .pipe(Effect.provideService(SshPasswordPrompt, prompt));
+
+        assert.equal(result.status, "pushed");
+        assert.deepStrictEqual(promptedAttempts, [1]);
+        assert.deepStrictEqual(
+          pushEnvironments.map((environment) => environment.T3_SSH_AUTH_SECRET),
+          ["", "correct horse battery staple"],
+        );
+        assert.ok(
+          pushEnvironments.every((environment) => environment.SSH_ASKPASS_REQUIRE === "force"),
+        );
+        assert.ok(pushEnvironments.every((environment) => Boolean(environment.SSH_ASKPASS)));
       }),
     );
 

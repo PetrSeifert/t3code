@@ -230,7 +230,11 @@ it.effect("preserves destination probe failures instead of treating them as miss
 it.effect("publishes by creating the repository, adding a remote, and pushing upstream", () => {
   const createCalls: Array<{ cwd: string; repository: string; visibility: string }> = [];
   const remoteCalls: Array<{ cwd: string; preferredName: string; url: string }> = [];
-  const pushCalls: Array<{ cwd: string; remoteName: string | null | undefined }> = [];
+  const pushCalls: Array<{
+    cwd: string;
+    remoteName: string | null | undefined;
+    sshDestination: string | undefined;
+  }> = [];
   const provider = makeProvider({
     createRepository: (input) =>
       Effect.sync(() => {
@@ -268,7 +272,13 @@ it.effect("publishes by creating the repository, adding a remote, and pushing up
     assert.deepStrictEqual(remoteCalls, [
       { cwd: "/workspace", preferredName: "origin", url: CLONE_URLS.sshUrl },
     ]);
-    assert.deepStrictEqual(pushCalls, [{ cwd: "/workspace", remoteName: "origin" }]);
+    assert.deepStrictEqual(pushCalls, [
+      {
+        cwd: "/workspace",
+        remoteName: "origin",
+        sshDestination: CLONE_URLS.sshUrl,
+      },
+    ]);
   }).pipe(
     Effect.provide(
       makeLayer({
@@ -281,7 +291,11 @@ it.effect("publishes by creating the repository, adding a remote, and pushing up
             }),
           pushCurrentBranch: (cwd, _fallbackBranch, options) =>
             Effect.sync(() => {
-              pushCalls.push({ cwd, remoteName: options?.remoteName });
+              pushCalls.push({
+                cwd,
+                remoteName: options?.remoteName,
+                sshDestination: options?.sshAuthentication?.destination,
+              });
               return {
                 status: "pushed" as const,
                 branch: "feature/remote-v1",
@@ -323,6 +337,42 @@ it.effect("publishes to the remote name returned by ensureRemote", () => {
                 status: "pushed" as const,
                 branch: "feature/remote-v1",
                 upstreamBranch: `${options?.remoteName ?? "missing"}/feature/remote-v1`,
+                setUpstream: true,
+              };
+            }),
+        },
+      }),
+    ),
+  );
+});
+
+it.effect("does not enable SSH authentication for HTTPS publishing", () => {
+  const pushOptions: GitVcsDriver.GitPushOptions[] = [];
+
+  return Effect.gen(function* () {
+    const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+    const result = yield* service.publishRepository({
+      cwd: "/workspace",
+      provider: "github",
+      repository: "octocat/t3code",
+      visibility: "private",
+      protocol: "https",
+    });
+
+    assert.equal(result.remoteUrl, CLONE_URLS.url);
+    assert.equal(pushOptions.length, 1);
+    assert.equal(pushOptions[0]?.sshAuthentication, undefined);
+  }).pipe(
+    Effect.provide(
+      makeLayer({
+        git: {
+          pushCurrentBranch: (_cwd, _fallbackBranch, options = {}) =>
+            Effect.sync(() => {
+              pushOptions.push(options);
+              return {
+                status: "pushed" as const,
+                branch: "main",
+                upstreamBranch: "origin/main",
                 setUpstream: true,
               };
             }),

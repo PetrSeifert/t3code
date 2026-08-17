@@ -14,6 +14,7 @@ import type {
   GitResolvePullRequestResult,
   GitStackedAction,
   SourceControlCloneProtocol,
+  SourceControlSshPasswordPromptRequest,
   SourceControlRepositoryVisibility,
   ThreadId,
 } from "@t3tools/contracts";
@@ -272,6 +273,9 @@ export function useSourceControlPublishRepositoryAction(scope: SourceControlActi
       visibility: SourceControlRepositoryVisibility;
       remoteName: string;
       protocol: SourceControlCloneProtocol;
+      onSshPasswordPrompt?: (
+        request: SourceControlSshPasswordPromptRequest,
+      ) => Promise<string | null>;
     }) => {
       const target = resolveScope(scope);
       if (target === null) {
@@ -285,12 +289,14 @@ export function useSourceControlPublishRepositoryAction(scope: SourceControlActi
           ),
         );
       }
+      const { onSshPasswordPrompt, ...publishInput } = input;
       return publishRepository({
         environmentId: target.environmentId,
         input: {
           cwd: target.cwd,
-          ...input,
+          ...publishInput,
         },
+        ...(onSshPasswordPrompt === undefined ? {} : { onSshPasswordPrompt }),
       });
     },
     [publishRepository, scope],
