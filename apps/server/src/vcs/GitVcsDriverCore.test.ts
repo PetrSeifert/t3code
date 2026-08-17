@@ -1774,6 +1774,39 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("still pushes when the remote URL probe fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["remote", "add", "origin", "git@github.com:octocat/t3code.git"]);
+
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        let pushCalls = 0;
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (!ChildProcess.isStandardCommand(command)) {
+            return delegate.spawn(command);
+          }
+          if (command.args[0] === "remote" && command.args[1] === "get-url") {
+            return Effect.succeed(makeFailedHandle("unable to read remote configuration"));
+          }
+          if (command.args[0] === "push") {
+            pushCalls += 1;
+            return Effect.succeed(makeSuccessfulHandle(""));
+          }
+          return delegate.spawn(command);
+        });
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ServerConfigLayer),
+        );
+
+        const result = yield* driver.pushCurrentBranch(cwd, null, { remoteName: "origin" });
+
+        assert.equal(result.status, "pushed");
+        assert.equal(pushCalls, 1);
+      }),
+    );
+
     it.effect("allows pushes to run longer than the default command timeout", () =>
       Effect.gen(function* () {
         const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;

@@ -1064,13 +1064,18 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     remoteName: string,
     direction: "fetch" | "push",
   ) {
-    const remoteUrl = yield* runGitStdout("GitVcsDriver.resolveRemoteSshAuthentication", cwd, [
+    return yield* runGitStdout("GitVcsDriver.resolveRemoteSshAuthentication", cwd, [
       "remote",
       "get-url",
       ...(direction === "push" ? ["--push"] : []),
       remoteName,
-    ]).pipe(Effect.map((stdout) => stdout.trim()));
-    return isSshRemoteUrl(remoteUrl) ? { destination: remoteUrl } : undefined;
+    ]).pipe(
+      Effect.map((stdout) => stdout.trim()),
+      Effect.map((remoteUrl) =>
+        isSshRemoteUrl(remoteUrl) ? { destination: remoteUrl } : undefined,
+      ),
+      Effect.orElseSucceed(() => undefined),
+    );
   });
 
   const branchExists = (cwd: string, refName: string): Effect.Effect<boolean, GitCommandError> =>
