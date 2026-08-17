@@ -13,6 +13,7 @@ import type {
   SourceControlProviderKind,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryVisibility,
+  SourceControlSshPasswordPromptRequest,
   VcsStatusResult,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -92,6 +93,7 @@ import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { readLocalApi } from "~/localApi";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
+import { SshPasswordRequestDialog } from "./SshPasswordRequestDialog";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -402,6 +404,12 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const [publishResult, setPublishResult] = useState<SourceControlPublishRepositoryResult | null>(
     null,
   );
+  const [publishSshPasswordPrompt, setPublishSshPasswordPrompt] =
+    useState<SourceControlSshPasswordPromptRequest | null>(null);
+  const pendingPublishSshPasswordPromptRef = useRef<{
+    readonly requestId: string;
+    readonly resolve: (password: string | null) => void;
+  } | null>(null);
   const sourceControlScope = useMemo(
     () => ({
       environmentId: props.environmentId,
@@ -485,6 +493,47 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     return owner.length > 0 && name.length > 0;
   }, [publishRepository, publishRepositoryAction.isPending, selectedPublishProviderReadiness]);
 
+  const requestPublishSshPassword = useCallback(
+    (request: SourceControlSshPasswordPromptRequest) =>
+      new Promise<string | null>((resolve) => {
+        pendingPublishSshPasswordPromptRef.current?.resolve(null);
+        pendingPublishSshPasswordPromptRef.current = {
+          requestId: request.requestId,
+          resolve,
+        };
+        setPublishSshPasswordPrompt(request);
+      }),
+    [],
+  );
+
+  const resolvePublishSshPasswordPrompt = useCallback(
+    (requestId: string, password: string | null) => {
+      const pending = pendingPublishSshPasswordPromptRef.current;
+      if (pending?.requestId !== requestId) {
+        return;
+      }
+      pendingPublishSshPasswordPromptRef.current = null;
+      setPublishSshPasswordPrompt(null);
+      pending.resolve(password);
+    },
+    [],
+  );
+
+  const cancelPublishSshPasswordPrompt = useCallback(() => {
+    const pending = pendingPublishSshPasswordPromptRef.current;
+    pendingPublishSshPasswordPromptRef.current = null;
+    setPublishSshPasswordPrompt(null);
+    pending?.resolve(null);
+  }, []);
+
+  useEffect(
+    () => () => {
+      pendingPublishSshPasswordPromptRef.current?.resolve(null);
+      pendingPublishSshPasswordPromptRef.current = null;
+    },
+    [],
+  );
+
   const submitPublishRepository = useCallback(() => {
     if (!canSubmitPublishRepository) {
       return;
@@ -499,7 +548,9 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
         visibility: publishVisibility,
         remoteName: publishRemoteName.trim() || "origin",
         protocol: publishProtocol,
+        ...(publishProtocol === "ssh" ? { onSshPasswordPrompt: requestPublishSshPassword } : {}),
       });
+      cancelPublishSshPasswordPrompt();
 
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
@@ -516,6 +567,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     })();
   }, [
     canSubmitPublishRepository,
+    cancelPublishSshPasswordPrompt,
     props.environmentId,
     props.gitCwd,
     publishProtocol,
@@ -524,16 +576,18 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     publishRepository,
     publishRepositoryAction,
     publishVisibility,
+    requestPublishSshPassword,
   ]);
 
   const resetState = useCallback(() => {
+    cancelPublishSshPasswordPrompt();
     setPublishRemoteName("origin");
     setPublishRepositoryOverride(null);
     setPublishWizardStep(0);
     setPublishAdvancedOpen(false);
     setPublishError(null);
     setPublishResult(null);
-  }, []);
+  }, [cancelPublishSshPasswordPrompt]);
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -971,6 +1025,16 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
           </DialogFooter>
         </div>
       </DialogPopup>
+      {publishSshPasswordPrompt ? (
+        <SshPasswordRequestDialog
+          key={publishSshPasswordPrompt.requestId}
+          request={publishSshPasswordPrompt}
+          onRespond={async (password) => {
+            resolvePublishSshPasswordPrompt(publishSshPasswordPrompt.requestId, password);
+          }}
+          onRemove={(requestId) => resolvePublishSshPasswordPrompt(requestId, null)}
+        />
+      ) : null}
     </Dialog>
   );
 }

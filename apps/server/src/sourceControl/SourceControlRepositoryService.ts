@@ -262,7 +262,16 @@ export const make = Effect.gen(function* () {
         };
       }
 
-      const pushResult = yield* git.pushCurrentBranch(input.cwd, null, { remoteName });
+      const pushResult = yield* git.pushCurrentBranch(input.cwd, null, {
+        remoteName,
+        ...(remoteUrl === urls.sshUrl
+          ? {
+              sshAuthentication: {
+                destination: remoteUrl,
+              },
+            }
+          : {}),
+      });
 
       return {
         repository: toRepositoryInfo(providerKind, urls),
