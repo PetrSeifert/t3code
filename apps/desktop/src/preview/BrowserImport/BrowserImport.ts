@@ -160,9 +160,9 @@ export const make = Effect.gen(function* BrowserImportMake() {
       });
     }
 
-    // Both branches fail with a tagged error carrying a `reason`, so the union
-    // stays structurally identifiable rather than collapsing to an anonymous
-    // shape that `Effect.catchTags` could not tell apart.
+    // Both branches fail with a tagged error, so the union stays structurally
+    // identifiable and each tag is handled on its own below rather than
+    // collapsing to an anonymous shape.
     const read: Effect.Effect<
       ReadonlyArray<ImportedCookie>,
       ChromiumCookieReadError | FirefoxCookieReadError,
@@ -181,17 +181,19 @@ export const make = Effect.gen(function* BrowserImportMake() {
     const cookies = yield* read.pipe(
       Effect.scoped,
       Effect.provide(platformServices),
-      Effect.mapError(
-        (cause) =>
-          new BrowserImportFailedError({
-            sourceId: definition.id,
-            // Firefox has one failure mode — its plaintext database would not
-            // open — so its error carries no reason of its own and the
-            // user-facing one is supplied here.
-            reason: cause._tag === "FirefoxCookieReadError" ? "readFailed" : cause.reason,
-            cause,
-          }),
-      ),
+      Effect.catchTags({
+        ChromiumCookieReadError: (cause) =>
+          Effect.fail(
+            new BrowserImportFailedError({ sourceId: definition.id, reason: cause.reason, cause }),
+          ),
+        // Firefox has one failure mode — its plaintext database would not open
+        // — so its error carries no reason of its own and the user-facing one
+        // is supplied here.
+        FirefoxCookieReadError: (cause) =>
+          Effect.fail(
+            new BrowserImportFailedError({ sourceId: definition.id, reason: "readFailed", cause }),
+          ),
+      }),
     );
 
     const session = yield* browserSession.getSession(input.scope, input.persistent).pipe(
