@@ -22,6 +22,7 @@ import { uuidv4 } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
 import { setPendingConnectionError } from "./use-remote-environment-registry";
 import { useAtomCommand } from "./use-atom-command";
+import { cancelSshPasswordPrompt, requestSshPassword } from "../components/SshPasswordPromptHost";
 import { showGitActionResult } from "./use-vcs-action-state";
 import { useThreadSelection } from "./use-thread-selection";
 import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
@@ -300,7 +301,9 @@ export function useSelectedThreadGitActions() {
         const result = await pull({
           environmentId: thread.environmentId,
           input: { cwd },
+          onSshPasswordPrompt: requestSshPassword,
         });
+        cancelSshPasswordPrompt();
         if (AsyncResult.isFailure(result)) {
           return result;
         }
@@ -327,10 +330,12 @@ export function useSelectedThreadGitActions() {
           const result = await runStackedAction({
             actionId,
             action: input.action,
+            onSshPasswordPrompt: requestSshPassword,
             ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
             ...(input.featureBranch ? { featureBranch: input.featureBranch } : {}),
             ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),
           });
+          cancelSshPasswordPrompt();
           if (AsyncResult.isFailure(result)) {
             return result;
           }

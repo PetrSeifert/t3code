@@ -1663,12 +1663,7 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         });
 
         const result = yield* driver
-          .pushCurrentBranch(cwd, null, {
-            remoteName: "origin",
-            sshAuthentication: {
-              destination: "git@github.com:octocat/t3code.git",
-            },
-          })
+          .pushCurrentBranch(cwd, null)
           .pipe(Effect.provideService(SshPasswordPrompt, prompt));
 
         assert.equal(result.status, "pushed");
@@ -1681,6 +1676,101 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
           pushEnvironments.every((environment) => environment.SSH_ASKPASS_REQUIRE === "force"),
         );
         assert.ok(pushEnvironments.every((environment) => Boolean(environment.SSH_ASKPASS)));
+      }),
+    );
+
+    it.effect("asks for an SSH secret and retries pull through askpass", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["remote", "add", "origin", "git@github.com:octocat/t3code.git"]);
+        yield* git(cwd, ["config", `branch.${initialBranch}.remote`, "origin"]);
+        yield* git(cwd, ["config", `branch.${initialBranch}.merge`, `refs/heads/${initialBranch}`]);
+        yield* git(cwd, ["update-ref", `refs/remotes/origin/${initialBranch}`, "HEAD"]);
+
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const pullEnvironments: NodeJS.ProcessEnv[] = [];
+        const promptedAttempts: number[] = [];
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (!ChildProcess.isStandardCommand(command)) {
+            return delegate.spawn(command);
+          }
+          if (command.args.includes("fetch")) {
+            return Effect.succeed(makeSuccessfulHandle(""));
+          }
+          if (command.args[0] !== "pull") {
+            return delegate.spawn(command);
+          }
+
+          const environment = command.options.env ?? {};
+          pullEnvironments.push(environment);
+          return Effect.succeed(
+            environment.T3_SSH_AUTH_SECRET === "correct horse battery staple"
+              ? makeSuccessfulHandle("")
+              : makeFailedHandle("git@github.com: Permission denied (publickey)."),
+          );
+        });
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ServerConfigLayer),
+        );
+        const prompt = SshPasswordPrompt.of({
+          isAvailable: true,
+          request: (request) =>
+            Effect.sync(() => {
+              promptedAttempts.push(request.attempt);
+              return "correct horse battery staple";
+            }),
+        });
+
+        const result = yield* driver
+          .pullCurrentBranch(cwd)
+          .pipe(Effect.provideService(SshPasswordPrompt, prompt));
+
+        assert.equal(result.status, "skipped_up_to_date");
+        assert.deepStrictEqual(promptedAttempts, [1]);
+        assert.deepStrictEqual(
+          pullEnvironments.map((environment) => environment.T3_SSH_AUTH_SECRET),
+          ["", "correct horse battery staple"],
+        );
+        assert.ok(
+          pullEnvironments.every((environment) => environment.SSH_ASKPASS_REQUIRE === "force"),
+        );
+        assert.ok(pullEnvironments.every((environment) => Boolean(environment.SSH_ASKPASS)));
+      }),
+    );
+
+    it.effect("preserves system SSH authentication when no prompt handler is available", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        yield* git(cwd, ["remote", "add", "origin", "git@github.com:octocat/t3code.git"]);
+
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const pushEnvironments: NodeJS.ProcessEnv[] = [];
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (!ChildProcess.isStandardCommand(command) || command.args[0] !== "push") {
+            return delegate.spawn(command);
+          }
+          pushEnvironments.push(command.options.env ?? {});
+          return Effect.succeed(makeSuccessfulHandle(""));
+        });
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(ServerConfigLayer),
+        );
+
+        yield* driver.pushCurrentBranch(cwd, null, {
+          remoteName: "origin",
+          sshAuthentication: {
+            destination: "git@github.com:octocat/t3code.git",
+          },
+        });
+
+        assert.equal(pushEnvironments.length, 1);
+        assert.equal(pushEnvironments[0]?.SSH_ASKPASS, undefined);
+        assert.equal(pushEnvironments[0]?.SSH_ASKPASS_REQUIRE, undefined);
+        assert.equal(pushEnvironments[0]?.T3_SSH_AUTH_SECRET, undefined);
       }),
     );
 

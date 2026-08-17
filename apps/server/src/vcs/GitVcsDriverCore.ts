@@ -30,6 +30,7 @@ import { dedupeRemoteBranchesWithLocalMatches, normalizeGitRemoteUrl } from "@t3
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { compactTraceAttributes } from "@t3tools/shared/observability";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { isSshRemoteUrl } from "@t3tools/shared/sourceControl";
 import {
   buildSshChildEnvironment,
   getDefaultSshAskpassDirectory,
@@ -153,7 +154,7 @@ interface ExecuteGitOptions {
   maxOutputBytes?: number | undefined;
   appendTruncationMarker?: boolean | undefined;
   progress?: GitVcsDriver.ExecuteGitProgress | undefined;
-  sshAuthentication?: GitVcsDriver.GitPushOptions["sshAuthentication"] | undefined;
+  sshAuthentication?: GitVcsDriver.GitSshAuthentication | undefined;
 }
 
 function parseBranchAb(value: string): { ahead: number; behind: number } {
@@ -923,12 +924,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         readonly sshAuthentication: NonNullable<ExecuteGitOptions["sshAuthentication"]>;
       },
     ) {
-      const prompt = Option.getOrElse(yield* Effect.serviceOption(SshPasswordPrompt), () =>
-        SshPasswordPrompt.of({
-          isAvailable: false,
-          request: () => Effect.succeed(null),
-        }),
-      );
+      const promptOption = yield* Effect.serviceOption(SshPasswordPrompt);
+      if (Option.isNone(promptOption) || !promptOption.value.isAvailable) {
+        return yield* executeGit(operation, cwd, args, {
+          ...options,
+          sshAuthentication: undefined,
+        });
+      }
+      const prompt = promptOption.value;
       let authSecret: string | null = null;
       let promptCount = 0;
 
@@ -1055,6 +1058,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         result.stdoutTruncated ? `${result.stdout}${OUTPUT_TRUNCATED_MARKER}` : result.stdout,
       ),
     );
+
+  const resolveRemoteSshAuthentication = Effect.fn("resolveRemoteSshAuthentication")(function* (
+    cwd: string,
+    remoteName: string,
+    direction: "fetch" | "push",
+  ) {
+    const remoteUrl = yield* runGitStdout("GitVcsDriver.resolveRemoteSshAuthentication", cwd, [
+      "remote",
+      "get-url",
+      ...(direction === "push" ? ["--push"] : []),
+      remoteName,
+    ]).pipe(Effect.map((stdout) => stdout.trim()));
+    return isSshRemoteUrl(remoteUrl) ? { destination: remoteUrl } : undefined;
+  });
 
   const branchExists = (cwd: string, refName: string): Effect.Effect<boolean, GitCommandError> =>
     executeGit(
@@ -2030,11 +2047,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const requestedRemoteName = options?.remoteName?.trim() || null;
     if (requestedRemoteName) {
       const publishBranch = yield* resolvePublishBranchName(cwd, branch);
+      const sshAuthentication =
+        options?.sshAuthentication ??
+        (yield* resolveRemoteSshAuthentication(cwd, requestedRemoteName, "push"));
       yield* runGit(
         "GitVcsDriver.pushCurrentBranch.pushWithRequestedRemote",
         cwd,
         ["push", "-u", requestedRemoteName, `HEAD:refs/heads/${publishBranch}`],
-        { timeoutMs: null, sshAuthentication: options?.sshAuthentication },
+        { timeoutMs: null, sshAuthentication },
       );
       return {
         status: "pushed" as const,
@@ -2093,11 +2113,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         });
       }
       const publishBranch = yield* resolvePublishBranchName(cwd, branch);
+      const sshAuthentication =
+        options?.sshAuthentication ??
+        (yield* resolveRemoteSshAuthentication(cwd, publishRemoteName, "push"));
       yield* runGit(
         "GitVcsDriver.pushCurrentBranch.pushWithUpstream",
         cwd,
         ["push", "-u", publishRemoteName, `HEAD:refs/heads/${publishBranch}`],
-        { timeoutMs: null, sshAuthentication: options?.sshAuthentication },
+        { timeoutMs: null, sshAuthentication },
       );
       return {
         status: "pushed" as const,
@@ -2111,11 +2134,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.orElseSucceed(() => null),
     );
     if (currentUpstream) {
+      const sshAuthentication =
+        options?.sshAuthentication ??
+        (yield* resolveRemoteSshAuthentication(cwd, currentUpstream.remoteName, "push"));
       yield* runGit(
         "GitVcsDriver.pushCurrentBranch.pushUpstream",
         cwd,
         ["push", currentUpstream.remoteName, `HEAD:refs/heads/${currentUpstream.branchName}`],
-        { timeoutMs: null, sshAuthentication: options?.sshAuthentication },
+        { timeoutMs: null, sshAuthentication },
       );
       return {
         status: "pushed" as const,
@@ -2125,9 +2151,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       };
     }
 
+    const fallbackRemoteName = yield* resolvePushRemoteName(cwd, branch).pipe(
+      Effect.orElseSucceed(() => null),
+    );
+    const sshAuthentication =
+      options?.sshAuthentication ??
+      (fallbackRemoteName === null
+        ? undefined
+        : yield* resolveRemoteSshAuthentication(cwd, fallbackRemoteName, "push"));
     yield* runGit("GitVcsDriver.pushCurrentBranch.push", cwd, ["push"], {
       timeoutMs: null,
-      sshAuthentication: options?.sshAuthentication,
+      sshAuthentication,
     });
     return {
       status: "pushed" as const,
@@ -2168,9 +2202,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ["rev-parse", "HEAD"],
       true,
     ).pipe(Effect.map((stdout) => stdout.trim()));
-    yield* executeGit("GitVcsDriver.pullCurrentBranch.pull", cwd, ["pull", "--ff-only"], {
+    const upstream = yield* resolveCurrentUpstream(cwd).pipe(Effect.orElseSucceed(() => null));
+    const sshAuthentication =
+      upstream === null
+        ? undefined
+        : yield* resolveRemoteSshAuthentication(cwd, upstream.remoteName, "fetch");
+    yield* runGit("GitVcsDriver.pullCurrentBranch.pull", cwd, ["pull", "--ff-only"], {
       timeoutMs: 30_000,
       fallbackErrorDetail: "git pull failed",
+      sshAuthentication,
     });
     const afterSha = yield* runGitStdout(
       "GitVcsDriver.pullCurrentBranch.afterSha",
@@ -2918,7 +2958,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchPullRequestBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchPullRequestBranch"] =
     Effect.fn("fetchPullRequestBranch")(function* (input) {
       const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
-      yield* executeGit(
+      const sshAuthentication = yield* resolveRemoteSshAuthentication(
+        input.cwd,
+        remoteName,
+        "fetch",
+      );
+      yield* runGit(
         "GitVcsDriver.fetchPullRequestBranch",
         input.cwd,
         [
@@ -2930,6 +2975,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ],
         {
           fallbackErrorDetail: "git fetch pull request branch failed",
+          sshAuthentication,
         },
       );
     });
@@ -2949,14 +2995,20 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchPullRequestHeadCommit: GitVcsDriver.GitVcsDriver["Service"]["fetchPullRequestHeadCommit"] =
     Effect.fn("fetchPullRequestHeadCommit")(function* (input) {
       const remoteName = yield* resolvePrimaryRemoteName(input.cwd);
+      const sshAuthentication = yield* resolveRemoteSshAuthentication(
+        input.cwd,
+        remoteName,
+        "fetch",
+      );
       // No refspec destination: the pull head lands in FETCH_HEAD (per worktree) instead of a
       // branch, which is the only way to read it while that branch is checked out somewhere.
-      yield* executeGit(
+      yield* runGit(
         "GitVcsDriver.fetchPullRequestHeadCommit",
         input.cwd,
         ["fetch", "--quiet", "--no-tags", remoteName, `refs/pull/${input.prNumber}/head`],
         {
           fallbackErrorDetail: "git fetch pull request head failed",
+          sshAuthentication,
         },
       );
 
@@ -3025,15 +3077,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const fetchRemote: GitVcsDriver.GitVcsDriver["Service"]["fetchRemote"] = Effect.fn("fetchRemote")(
     function* (input) {
-      yield* executeGit(
-        "GitVcsDriver.fetchRemote",
+      const sshAuthentication = yield* resolveRemoteSshAuthentication(
         input.cwd,
-        ["fetch", "--quiet", input.remoteName],
-        {
-          env: STATUS_UPSTREAM_REFRESH_ENV,
-          fallbackErrorDetail: `git fetch ${input.remoteName} failed`,
-        },
+        input.remoteName,
+        "fetch",
       );
+      yield* runGit("GitVcsDriver.fetchRemote", input.cwd, ["fetch", "--quiet", input.remoteName], {
+        env: STATUS_UPSTREAM_REFRESH_ENV,
+        fallbackErrorDetail: `git fetch ${input.remoteName} failed`,
+        sshAuthentication,
+      });
     },
   );
 
@@ -3058,13 +3111,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fetchRemoteBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchRemoteBranch"] = Effect.fn(
     "fetchRemoteBranch",
   )(function* (input) {
-    yield* runGit("GitVcsDriver.fetchRemoteBranch.fetch", input.cwd, [
-      "fetch",
-      "--quiet",
-      "--no-tags",
+    const sshAuthentication = yield* resolveRemoteSshAuthentication(
+      input.cwd,
       input.remoteName,
-      `+refs/heads/${input.remoteBranch}:refs/remotes/${input.remoteName}/${input.remoteBranch}`,
-    ]);
+      "fetch",
+    );
+    yield* runGit(
+      "GitVcsDriver.fetchRemoteBranch.fetch",
+      input.cwd,
+      [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        input.remoteName,
+        `+refs/heads/${input.remoteBranch}:refs/remotes/${input.remoteName}/${input.remoteBranch}`,
+      ],
+      { sshAuthentication },
+    );
 
     const localBranchAlreadyExists = yield* branchExists(input.cwd, input.localBranch);
     const targetRef = `${input.remoteName}/${input.remoteBranch}`;
@@ -3079,13 +3142,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const fetchRemoteTrackingBranch: GitVcsDriver.GitVcsDriver["Service"]["fetchRemoteTrackingBranch"] =
     Effect.fn("fetchRemoteTrackingBranch")(function* (input) {
-      yield* runGit("GitVcsDriver.fetchRemoteTrackingBranch", input.cwd, [
-        "fetch",
-        "--quiet",
-        "--no-tags",
+      const sshAuthentication = yield* resolveRemoteSshAuthentication(
+        input.cwd,
         input.remoteName,
-        `+refs/heads/${input.remoteBranch}:refs/remotes/${input.remoteName}/${input.remoteBranch}`,
-      ]);
+        "fetch",
+      );
+      yield* runGit(
+        "GitVcsDriver.fetchRemoteTrackingBranch",
+        input.cwd,
+        [
+          "fetch",
+          "--quiet",
+          "--no-tags",
+          input.remoteName,
+          `+refs/heads/${input.remoteBranch}:refs/remotes/${input.remoteName}/${input.remoteBranch}`,
+        ],
+        { sshAuthentication },
+      );
     });
 
   const setBranchUpstream: GitVcsDriver.GitVcsDriver["Service"]["setBranchUpstream"] = (input) =>
@@ -3281,7 +3354,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     );
 
   return GitVcsDriver.GitVcsDriver.of({
-    execute,
+    execute: (input) =>
+      input.sshAuthentication
+        ? executeGitWithSshAuthentication(input.operation, input.cwd, input.args, {
+            ...input,
+            sshAuthentication: input.sshAuthentication,
+          })
+        : execute(input),
     status,
     statusDetails,
     statusDetailsLocal,

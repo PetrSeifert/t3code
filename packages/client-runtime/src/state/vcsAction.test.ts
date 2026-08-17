@@ -341,6 +341,7 @@ describe("vcsActionState", () => {
       const target = { environmentId, cwd };
       const transportActionId = createVcsActionTransportId(target, actionId);
       const observed: GitActionProgressEvent[] = [];
+      const promptRequests: string[] = [];
       const events: GitActionProgressEvent[] = [
         {
           actionId: "unrelated-action",
@@ -349,6 +350,20 @@ describe("vcsActionState", () => {
           kind: "phase_started",
           phase: "commit",
           label: "Ignored",
+        },
+        {
+          actionId: transportActionId,
+          action,
+          cwd,
+          kind: "ssh_password_prompt",
+          request: {
+            requestId: "prompt-1",
+            destination: "github.com",
+            username: "git",
+            prompt: "Enter the SSH key passphrase or password.",
+            attempt: 1,
+            expiresAt: "2026-08-17T10:00:00.000Z",
+          },
         },
         {
           actionId: transportActionId,
@@ -376,9 +391,14 @@ describe("vcsActionState", () => {
           Effect.sync(() => {
             observed.push(event);
           }),
+        resolveSshPasswordPrompt: (request) =>
+          Effect.sync(() => {
+            promptRequests.push(request.requestId);
+          }),
       });
 
       expect(actual).toEqual(result);
+      expect(promptRequests).toEqual(["prompt-1"]);
       expect(observed.map((event) => event.actionId)).toEqual([actionId, actionId]);
       expect(observed.map((event) => event.kind)).toEqual(["phase_started", "action_finished"]);
     }),
