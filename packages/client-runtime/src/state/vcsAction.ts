@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -272,15 +273,24 @@ export function consumeVcsActionProgress<E, R, PromptError = never, PromptRequir
   E | PromptError | VcsActionExecutionError,
   R | PromptRequirements
 > {
-  return Effect.suspend(() => {
+  return Effect.gen(function* () {
+    const resolutionFailed = yield* Deferred.make<never, PromptError>();
     let terminalEvent: GitActionProgressEvent | null = null;
-    return stream.pipe(
+    const consume = stream.pipe(
       Stream.runForEach((event) => {
         if (event.kind === "ssh_password_prompt") {
           if (event.actionId !== input.transportActionId || event.cwd !== input.target.cwd) {
             return Effect.void;
           }
-          return input.resolveSshPasswordPrompt?.(event.request) ?? Effect.void;
+          const resolvePrompt = input.resolveSshPasswordPrompt;
+          if (resolvePrompt === undefined) {
+            return Effect.void;
+          }
+          return resolvePrompt(event.request).pipe(
+            Effect.tapError((error) => Deferred.fail(resolutionFailed, error)),
+            Effect.forkChild({ startImmediately: true }),
+            Effect.asVoid,
+          );
         }
         const normalized = normalizeVcsActionProgressEvent(
           input.target,
@@ -324,6 +334,7 @@ export function consumeVcsActionProgress<E, R, PromptError = never, PromptRequir
         );
       }),
     );
+    return yield* Effect.raceFirst(consume, Deferred.await(resolutionFailed));
   });
 }
 

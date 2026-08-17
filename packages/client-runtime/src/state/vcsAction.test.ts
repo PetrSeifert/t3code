@@ -445,6 +445,54 @@ describe("vcsActionState", () => {
     }),
   );
 
+  it.effect("consumes a terminal failure while an SSH prompt is still open", () =>
+    Effect.gen(function* () {
+      const target = { environmentId, cwd };
+      const transportActionId = createVcsActionTransportId(target, actionId);
+      let promptCalls = 0;
+      const error = yield* consumeVcsActionProgress(
+        Stream.fromIterable<GitActionProgressEvent>([
+          {
+            actionId: transportActionId,
+            action,
+            cwd,
+            kind: "ssh_password_prompt",
+            request: {
+              requestId: "prompt-1",
+              destination: "github.com",
+              username: "git",
+              prompt: "Enter the SSH key passphrase or password.",
+              attempt: 1,
+              expiresAt: "2026-08-17T10:00:00.000Z",
+            },
+          },
+          {
+            actionId: transportActionId,
+            action,
+            cwd,
+            kind: "action_failed",
+            phase: "push",
+            message: "The SSH password prompt expired.",
+          },
+        ]),
+        {
+          target,
+          transportActionId,
+          actionId,
+          action,
+          onProgress: () => Effect.void,
+          resolveSshPasswordPrompt: () =>
+            Effect.sync(() => {
+              promptCalls += 1;
+            }).pipe(Effect.zipRight(Effect.never)),
+        },
+      ).pipe(Effect.flip, Effect.timeout("1 second"));
+
+      expect(error).toBeInstanceOf(VcsActionRemoteFailureError);
+      expect(promptCalls).toBe(1);
+    }),
+  );
+
   it.effect("reports a missing terminal event as a protocol failure", () =>
     Effect.gen(function* () {
       const target = { environmentId, cwd };
