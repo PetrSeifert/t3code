@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { canSubmitSshPassword } from "./sshPasswordRequestForm";
 
 export interface SshPasswordPromptRequestPresentation {
   readonly requestId: string;
@@ -120,6 +121,7 @@ export function SshPasswordRequestDialog({
   const visibleResponseError = isExpired
     ? "This SSH password prompt expired. Try again."
     : responseError;
+  const canSubmit = canSubmitSshPassword({ password, isResponding, isExpired });
 
   const respond = async (nextPassword: string | null) => {
     if (isRespondingRef.current) {
@@ -183,7 +185,9 @@ export function SshPasswordRequestDialog({
             id={formId}
             onSubmit={(event) => {
               event.preventDefault();
-              void respond(password);
+              if (canSubmit) {
+                void respond(password);
+              }
             }}
           >
             <div className="space-y-2">
@@ -224,7 +228,7 @@ export function SshPasswordRequestDialog({
           <Button disabled={isResponding} type="button" variant="outline" onClick={cancelPrompt}>
             {isExpired ? "Dismiss" : "Cancel"}
           </Button>
-          <Button disabled={isResponding || isExpired} form={formId} type="submit">
+          <Button disabled={!canSubmit} form={formId} type="submit">
             Continue
           </Button>
         </DialogFooter>

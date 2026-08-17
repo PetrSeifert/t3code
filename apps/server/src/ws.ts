@@ -2424,7 +2424,11 @@ const makeWsRpcLayer = (
           ),
       });
     }),
-  ).pipe(Layer.provide(SourceControlSshPasswordPrompts.layer));
+  ).pipe(
+    // makeWsRpcLayer runs once per authenticated WebSocket, so pending prompts and their
+    // resolution handlers stay scoped to the connection that started the operation.
+    Layer.provide(SourceControlSshPasswordPrompts.layer),
+  );
 
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
