@@ -393,6 +393,7 @@ const buildAppUnderTest = (options?: {
     vcsDriverRegistry?: Partial<VcsDriverRegistry.VcsDriverRegistry["Service"]>;
     gitVcsDriver?: Partial<GitVcsDriver.GitVcsDriver["Service"]>;
     gitManager?: Partial<GitManager.GitManager["Service"]>;
+    gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
     sourceControlRepositoryService?: Partial<
       SourceControlRepositoryService.SourceControlRepositoryService["Service"]
     >;
@@ -576,11 +577,15 @@ const buildAppUnderTest = (options?: {
         Layer.provide(T3ProjectFileLoader.layer),
       ),
     );
-    const gitWorkflowLayer = GitWorkflowService.layer.pipe(
-      Layer.provideMerge(vcsDriverRegistryLayer),
-      Layer.provideMerge(gitVcsDriverLayer),
-      Layer.provideMerge(gitManagerLayer),
-    );
+    const gitWorkflowLayer = options?.layers?.gitWorkflow
+      ? Layer.mock(GitWorkflowService.GitWorkflowService)({
+          ...options.layers.gitWorkflow,
+        })
+      : GitWorkflowService.layer.pipe(
+          Layer.provideMerge(vcsDriverRegistryLayer),
+          Layer.provideMerge(gitVcsDriverLayer),
+          Layer.provideMerge(gitManagerLayer),
+        );
     const vcsProvisioningLayer = VcsProvisioningService.layer.pipe(
       Layer.provide(vcsDriverRegistryLayer),
     );
@@ -4777,6 +4782,156 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.deepEqual(receivedPasswords, ["correct horse battery staple"]);
       assert.deepEqual(events[1], { _tag: "complete", result: publishResult });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes SSH prompts for clone, pull, and stacked push operations", () =>
+    Effect.gen(function* () {
+      const receivedPasswords: Array<string | null> = [];
+      const requestPassword = Effect.fn("server.test.requestSshPassword")(function* (
+        destination: string,
+      ) {
+        const prompt = Option.getOrThrow(yield* Effect.serviceOption(SshPasswordPrompt));
+        const password = yield* prompt
+          .request({
+            destination,
+            username: null,
+            prompt: "Enter the SSH key passphrase or password.",
+            attempt: 1,
+          })
+          .pipe(Effect.orDie);
+        receivedPasswords.push(password);
+      });
+      const actionResult = {
+        action: "push" as const,
+        branch: { status: "skipped_not_requested" as const },
+        commit: { status: "skipped_not_requested" as const },
+        push: { status: "pushed" as const, branch: "main", upstreamBranch: "origin/main" },
+        pr: { status: "skipped_not_requested" as const },
+        toast: {
+          title: "Pushed main",
+          cta: { kind: "none" as const },
+        },
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          sourceControlRepositoryService: {
+            cloneRepository: (input) =>
+              requestPassword("clone.example.com").pipe(
+                Effect.as({
+                  cwd: input.destinationPath,
+                  remoteUrl: "git@clone.example.com:octocat/t3code.git",
+                  repository: null,
+                }),
+              ),
+          },
+          gitWorkflow: {
+            pullCurrentBranch: () =>
+              requestPassword("pull.example.com").pipe(
+                Effect.as({
+                  status: "skipped_up_to_date" as const,
+                  refName: "main",
+                  upstreamRef: "origin/main",
+                }),
+              ),
+            runStackedAction: (input, options) =>
+              Effect.gen(function* () {
+                yield* requestPassword("push.example.com");
+                yield* (
+                  options?.progressReporter?.publish({
+                    actionId: options.actionId ?? input.actionId,
+                    cwd: input.cwd,
+                    action: input.action,
+                    kind: "action_finished",
+                    result: actionResult,
+                  }) ?? Effect.void
+                );
+                return actionResult;
+              }),
+          },
+          vcsStatusBroadcaster: {
+            refreshStatus: () =>
+              Effect.succeed({
+                isRepo: true,
+                hasPrimaryRemote: true,
+                isDefaultRef: true,
+                refName: "main",
+                hasWorkingTreeChanges: false,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+                hasUpstream: true,
+                aheadCount: 0,
+                behindCount: 0,
+                pr: null,
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => {
+          const resolvePrompt = (requestId: string) =>
+            client[WS_METHODS.sourceControlResolveSshPasswordPrompt]({
+              requestId,
+              password: "correct horse battery staple",
+            });
+          return Effect.gen(function* () {
+            const cloneEvents = yield* client[WS_METHODS.sourceControlCloneRepositoryWithPrompts]({
+              remoteUrl: "git@clone.example.com:octocat/t3code.git",
+              destinationPath: "/tmp/clone",
+            }).pipe(
+              Stream.tap((event) =>
+                event._tag === "ssh_password_prompt"
+                  ? resolvePrompt(event.request.requestId)
+                  : Effect.void,
+              ),
+              Stream.runCollect,
+            );
+            const pullEvents = yield* client[WS_METHODS.vcsPullWithPrompts]({
+              cwd: "/tmp/project",
+            }).pipe(
+              Stream.tap((event) =>
+                event._tag === "ssh_password_prompt"
+                  ? resolvePrompt(event.request.requestId)
+                  : Effect.void,
+              ),
+              Stream.runCollect,
+            );
+            const pushEvents = yield* client[WS_METHODS.gitRunStackedActionWithPrompts]({
+              actionId: "push-action",
+              cwd: "/tmp/project",
+              action: "push",
+            }).pipe(
+              Stream.tap((event) =>
+                event.kind === "ssh_password_prompt"
+                  ? resolvePrompt(event.request.requestId)
+                  : Effect.void,
+              ),
+              Stream.runCollect,
+            );
+
+            assert.deepEqual(
+              Array.from(cloneEvents, (event) => event._tag),
+              ["ssh_password_prompt", "complete"],
+            );
+            assert.deepEqual(
+              Array.from(pullEvents, (event) => event._tag),
+              ["ssh_password_prompt", "complete"],
+            );
+            assert.deepEqual(
+              Array.from(pushEvents, (event) => event.kind),
+              ["ssh_password_prompt", "action_finished"],
+            );
+          });
+        }),
+      );
+
+      assert.deepEqual(receivedPasswords, [
+        "correct horse battery staple",
+        "correct horse battery staple",
+        "correct horse battery staple",
+      ]);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

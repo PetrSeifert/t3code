@@ -13,7 +13,6 @@ import type {
   SourceControlProviderKind,
   SourceControlPublishRepositoryResult,
   SourceControlRepositoryVisibility,
-  SourceControlSshPasswordPromptRequest,
   VcsStatusResult,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -93,7 +92,7 @@ import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { readLocalApi } from "~/localApi";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
-import { SshPasswordRequestDialog } from "./SshPasswordRequestDialog";
+import { SshPasswordRequestDialog, useSshPasswordRequest } from "./SshPasswordRequestDialog";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -404,12 +403,12 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   const [publishResult, setPublishResult] = useState<SourceControlPublishRepositoryResult | null>(
     null,
   );
-  const [publishSshPasswordPrompt, setPublishSshPasswordPrompt] =
-    useState<SourceControlSshPasswordPromptRequest | null>(null);
-  const pendingPublishSshPasswordPromptRef = useRef<{
-    readonly requestId: string;
-    readonly resolve: (password: string | null) => void;
-  } | null>(null);
+  const {
+    prompt: publishSshPasswordPrompt,
+    request: requestPublishSshPassword,
+    resolve: resolvePublishSshPasswordPrompt,
+    cancel: cancelPublishSshPasswordPrompt,
+  } = useSshPasswordRequest();
   const sourceControlScope = useMemo(
     () => ({
       environmentId: props.environmentId,
@@ -492,47 +491,6 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
     const name = rest.join("/").trim();
     return owner.length > 0 && name.length > 0;
   }, [publishRepository, publishRepositoryAction.isPending, selectedPublishProviderReadiness]);
-
-  const requestPublishSshPassword = useCallback(
-    (request: SourceControlSshPasswordPromptRequest) =>
-      new Promise<string | null>((resolve) => {
-        pendingPublishSshPasswordPromptRef.current?.resolve(null);
-        pendingPublishSshPasswordPromptRef.current = {
-          requestId: request.requestId,
-          resolve,
-        };
-        setPublishSshPasswordPrompt(request);
-      }),
-    [],
-  );
-
-  const resolvePublishSshPasswordPrompt = useCallback(
-    (requestId: string, password: string | null) => {
-      const pending = pendingPublishSshPasswordPromptRef.current;
-      if (pending?.requestId !== requestId) {
-        return;
-      }
-      pendingPublishSshPasswordPromptRef.current = null;
-      setPublishSshPasswordPrompt(null);
-      pending.resolve(password);
-    },
-    [],
-  );
-
-  const cancelPublishSshPasswordPrompt = useCallback(() => {
-    const pending = pendingPublishSshPasswordPromptRef.current;
-    pendingPublishSshPasswordPromptRef.current = null;
-    setPublishSshPasswordPrompt(null);
-    pending?.resolve(null);
-  }, []);
-
-  useEffect(
-    () => () => {
-      pendingPublishSshPasswordPromptRef.current?.resolve(null);
-      pendingPublishSshPasswordPromptRef.current = null;
-    },
-    [],
-  );
 
   const submitPublishRepository = useCallback(() => {
     if (!canSubmitPublishRepository) {
@@ -1077,6 +1035,12 @@ export default function GitActionsControl({
   const [isPublishDialogOpen, setIsPublishDialogOpen] = useState(false);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
+  const {
+    prompt: gitSshPasswordPrompt,
+    request: requestGitSshPassword,
+    resolve: resolveGitSshPasswordPrompt,
+    cancel: cancelGitSshPasswordPrompt,
+  } = useSshPasswordRequest();
   const activeGitActionProgressRef = useRef<ActiveGitActionProgress | null>(null);
   const sourceControlScope = useMemo(
     () => ({ environmentId: activeEnvironmentId, cwd: gitCwd }),
@@ -1463,6 +1427,8 @@ export default function GitActionsControl({
             // Let the settled mutation publish the error toast to avoid a
             // transient intermediate state before the final failure message.
             return;
+          case "ssh_password_prompt":
+            return;
         }
 
         updateActiveProgressToast();
@@ -1475,8 +1441,10 @@ export default function GitActionsControl({
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
         onProgress: applyProgressEvent,
+        onSshPasswordPrompt: requestGitSshPassword,
       });
 
+      cancelGitSshPasswordPrompt();
       activeGitActionProgressRef.current = null;
       if (result._tag === "Failure") {
         if (isAtomCommandInterrupted(result)) {
@@ -1621,7 +1589,8 @@ export default function GitActionsControl({
         data: threadToastData,
       });
       void (async () => {
-        const result = await pullAction.run();
+        const result = await pullAction.run(requestGitSshPassword);
+        cancelGitSshPasswordPrompt();
         if (result._tag === "Failure") {
           if (isAtomCommandInterrupted(result)) {
             toastManager.close(toastId);
@@ -2069,6 +2038,17 @@ export default function GitActionsControl({
         environmentId={activeEnvironmentId}
         gitCwd={gitCwd}
       />
+
+      {gitSshPasswordPrompt ? (
+        <SshPasswordRequestDialog
+          key={gitSshPasswordPrompt.requestId}
+          request={gitSshPasswordPrompt}
+          onRespond={async (password) => {
+            resolveGitSshPasswordPrompt(gitSshPasswordPrompt.requestId, password);
+          }}
+          onRemove={(requestId) => resolveGitSshPasswordPrompt(requestId, null)}
+        />
+      ) : null}
 
       <Dialog
         open={pendingDefaultBranchAction !== null}
