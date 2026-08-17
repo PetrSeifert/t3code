@@ -129,6 +129,62 @@ const makeCommandHarness = Effect.fn("sourceControl.test.makeCommandHarness")(fu
 });
 
 describe("source control environment atoms", () => {
+  it.effect("relays SSH password prompts while cloning", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const resolutionReceived = yield* Deferred.make<void>();
+        const promptRequests: string[] = [];
+        const cloneResult = {
+          cwd: "/workspace/t3code",
+          remoteUrl: "git@github.com:t3tools/t3code.git",
+          repository: null,
+        };
+        const client = {
+          [WS_METHODS.sourceControlCloneRepositoryWithPrompts]: () =>
+            Stream.make({
+              _tag: "ssh_password_prompt" as const,
+              request: {
+                requestId: "clone-prompt-1",
+                destination: "git@github.com:t3tools/t3code.git",
+                username: null,
+                prompt: "Enter the SSH key passphrase or password.",
+                attempt: 1,
+                expiresAt: "2026-08-17T10:00:00.000Z",
+              },
+            }).pipe(
+              Stream.concat(
+                Stream.fromEffect(
+                  Deferred.await(resolutionReceived).pipe(
+                    Effect.as({ _tag: "complete" as const, result: cloneResult }),
+                  ),
+                ),
+              ),
+            ),
+          [WS_METHODS.sourceControlResolveSshPasswordPrompt]: () =>
+            Deferred.succeed(resolutionReceived, undefined).pipe(Effect.asVoid),
+        } as unknown as WsRpcProtocolClient;
+        const harness = yield* makeCommandHarness(client, true);
+
+        const result = yield* Effect.promise(() =>
+          harness.atoms.cloneRepository.run(harness.registry, {
+            environmentId: TARGET.environmentId,
+            input: {
+              remoteUrl: cloneResult.remoteUrl,
+              destinationPath: cloneResult.cwd,
+            },
+            onSshPasswordPrompt: async (request) => {
+              promptRequests.push(request.requestId);
+              return "secret";
+            },
+          }),
+        );
+
+        expect(AsyncResult.isSuccess(result)).toBe(true);
+        expect(promptRequests).toEqual(["clone-prompt-1"]);
+      }),
+    ),
+  );
+
   it.effect("relays SSH password prompts while publishing and returns the streamed result", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -196,6 +252,49 @@ describe("source control environment atoms", () => {
         expect(resolutions).toEqual([
           { requestId: "prompt-1", password: "correct horse battery staple" },
         ]);
+      }),
+    ),
+  );
+
+  it.effect("fails publishing when the SSH prompt response cannot reach the server", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const expectedError = new EnvironmentRpcUnavailableError({
+          environmentId: TARGET.environmentId,
+          message: "SSH prompt submission failed",
+        });
+        const client = {
+          [WS_METHODS.sourceControlPublishRepositoryWithPrompts]: () =>
+            Stream.make({
+              _tag: "ssh_password_prompt" as const,
+              request: {
+                requestId: "prompt-1",
+                destination: "github.com",
+                username: null,
+                prompt: "Enter the SSH key passphrase or password.",
+                attempt: 1,
+                expiresAt: "2026-08-17T10:00:00.000Z",
+              },
+            }),
+          [WS_METHODS.sourceControlResolveSshPasswordPrompt]: () => Effect.fail(expectedError),
+        } as unknown as WsRpcProtocolClient;
+        const harness = yield* makeCommandHarness(client, true);
+
+        const result = yield* Effect.promise(() =>
+          harness.atoms.publishRepository.run(harness.registry, {
+            environmentId: TARGET.environmentId,
+            input: {
+              cwd: "/repo",
+              provider: "github",
+              repository: "t3tools/t3code",
+              visibility: "private",
+              protocol: "ssh",
+            },
+            onSshPasswordPrompt: async () => "secret",
+          }),
+        );
+
+        expect(AsyncResult.isFailure(result)).toBe(true);
       }),
     ),
   );

@@ -121,6 +121,16 @@ export const SourceControlSshPasswordPromptResolutionInput = Schema.Struct({
 export type SourceControlSshPasswordPromptResolutionInput =
   typeof SourceControlSshPasswordPromptResolutionInput.Type;
 
+export const SourceControlCloneRepositoryEvent = Schema.Union([
+  Schema.TaggedStruct("ssh_password_prompt", {
+    request: SourceControlSshPasswordPromptRequest,
+  }),
+  Schema.TaggedStruct("complete", {
+    result: SourceControlCloneRepositoryResult,
+  }),
+]);
+export type SourceControlCloneRepositoryEvent = typeof SourceControlCloneRepositoryEvent.Type;
+
 export const SourceControlPublishRepositoryEvent = Schema.Union([
   Schema.TaggedStruct("ssh_password_prompt", {
     request: SourceControlSshPasswordPromptRequest,

@@ -35,6 +35,7 @@ import {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   VcsPullInput,
+  VcsPullEvent,
   GitPullRequestRefInput,
   VcsPullResult,
   VcsRemoveWorktreeInput,
@@ -183,6 +184,7 @@ import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
   SourceControlCloneRepositoryInput,
+  SourceControlCloneRepositoryEvent,
   SourceControlCloneRepositoryResult,
   SourceControlDiscoveryResult,
   SourceControlPublishRepositoryEvent,
@@ -215,6 +217,7 @@ export const WS_METHODS = {
 
   // VCS methods
   vcsPull: "vcs.pull",
+  vcsPullWithPrompts: "vcs.pullWithPrompts",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
   vcsCreateWorktree: "vcs.createWorktree",
@@ -225,6 +228,7 @@ export const WS_METHODS = {
 
   // Git workflow methods
   gitRunStackedAction: "git.runStackedAction",
+  gitRunStackedActionWithPrompts: "git.runStackedActionWithPrompts",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
@@ -302,6 +306,7 @@ export const WS_METHODS = {
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
+  sourceControlCloneRepositoryWithPrompts: "sourceControl.cloneRepositoryWithPrompts",
   sourceControlPublishRepository: "sourceControl.publishRepository",
   sourceControlPublishRepositoryWithPrompts: "sourceControl.publishRepositoryWithPrompts",
   sourceControlResolveSshPasswordPrompt: "sourceControl.resolveSshPasswordPrompt",
@@ -613,6 +618,16 @@ export const WsSourceControlCloneRepositoryRpc = Rpc.make(WS_METHODS.sourceContr
   error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
 });
 
+export const WsSourceControlCloneRepositoryWithPromptsRpc = Rpc.make(
+  WS_METHODS.sourceControlCloneRepositoryWithPrompts,
+  {
+    payload: SourceControlCloneRepositoryInput,
+    success: SourceControlCloneRepositoryEvent,
+    error: Schema.Union([SourceControlRepositoryError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
+
 export const WsSourceControlPublishRepositoryRpc = Rpc.make(
   WS_METHODS.sourceControlPublishRepository,
   {
@@ -701,6 +716,13 @@ export const WsVcsPullRpc = Rpc.make(WS_METHODS.vcsPull, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+export const WsVcsPullWithPromptsRpc = Rpc.make(WS_METHODS.vcsPullWithPrompts, {
+  payload: VcsPullInput,
+  success: VcsPullEvent,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
 export const WsVcsRefreshStatusRpc = Rpc.make(WS_METHODS.vcsRefreshStatus, {
   payload: VcsStatusInput,
   success: VcsStatusResult,
@@ -713,6 +735,16 @@ export const WsGitRunStackedActionRpc = Rpc.make(WS_METHODS.gitRunStackedAction,
   error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
   stream: true,
 });
+
+export const WsGitRunStackedActionWithPromptsRpc = Rpc.make(
+  WS_METHODS.gitRunStackedActionWithPrompts,
+  {
+    payload: GitRunStackedActionInput,
+    success: GitActionProgressEvent,
+    error: Schema.Union([GitManagerServiceError, EnvironmentAuthorizationError]),
+    stream: true,
+  },
+);
 
 export const WsGitResolvePullRequestRpc = Rpc.make(WS_METHODS.gitResolvePullRequest, {
   payload: GitPullRequestRefInput,
@@ -1048,6 +1080,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsRequestReviewersRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
+  WsSourceControlCloneRepositoryWithPromptsRpc,
   WsSourceControlPublishRepositoryRpc,
   WsSourceControlPublishRepositoryWithPromptsRpc,
   WsSourceControlResolveSshPasswordPromptRpc,
@@ -1061,8 +1094,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsAssetsCreateUrlRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
+  WsVcsPullWithPromptsRpc,
   WsVcsRefreshStatusRpc,
   WsGitRunStackedActionRpc,
+  WsGitRunStackedActionWithPromptsRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsVcsListRefsRpc,

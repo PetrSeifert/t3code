@@ -47,6 +47,10 @@ import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
 import { sourceControlEnvironment } from "../../state/sourceControl";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
+import {
+  cancelSshPasswordPrompt,
+  requestSshPassword,
+} from "../../components/SshPasswordPromptHost";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { SourceControlIcon } from "../../components/SourceControlIcon";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -924,11 +928,13 @@ export function AddProjectDestinationScreen(props: {
     setIsSubmitting(true);
     const cloneResult = await cloneRepository({
       environmentId: environment.environmentId,
+      onSshPasswordPrompt: requestSshPassword,
       input: {
         remoteUrl,
         destinationPath: resolved.path,
       },
     });
+    cancelSshPasswordPrompt();
     if (AsyncResult.isFailure(cloneResult)) {
       setError(errorMessage(Cause.squash(cloneResult.cause)));
     } else {

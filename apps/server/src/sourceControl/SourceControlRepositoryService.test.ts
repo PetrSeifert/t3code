@@ -195,6 +195,53 @@ it.effect("clones a looked-up repository into the requested destination", () =>
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("enables password prompting for SSH clones", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const parent = yield* fs.makeTempDirectoryScoped({
+      prefix: "t3-source-control-ssh-clone-parent-",
+    });
+    const destinationPath = `${parent}/t3code`;
+    const cloneCalls: Array<{
+      cwd: string;
+      args: ReadonlyArray<string>;
+      sshAuthentication: GitVcsDriver.ExecuteGitInput["sshAuthentication"];
+    }> = [];
+
+    yield* Effect.gen(function* () {
+      const service = yield* SourceControlRepositoryService.SourceControlRepositoryService;
+      yield* service.cloneRepository({
+        remoteUrl: CLONE_URLS.sshUrl,
+        destinationPath,
+      });
+
+      assert.deepStrictEqual(cloneCalls, [
+        {
+          cwd: parent,
+          args: ["clone", CLONE_URLS.sshUrl, "t3code"],
+          sshAuthentication: { destination: CLONE_URLS.sshUrl },
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        makeLayer({
+          git: {
+            execute: (input) =>
+              Effect.sync(() => {
+                cloneCalls.push({
+                  cwd: input.cwd,
+                  args: input.args,
+                  sshAuthentication: input.sshAuthentication,
+                });
+                return processOutput();
+              }),
+          },
+        }),
+      ),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("preserves destination probe failures instead of treating them as missing paths", () => {
   const fileSystemCause = PlatformError.systemError({
     _tag: "PermissionDenied",

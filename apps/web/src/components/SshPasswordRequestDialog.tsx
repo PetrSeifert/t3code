@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef, useState } from "react";
+import type { SourceControlSshPasswordPromptRequest } from "@t3tools/contracts";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { Button } from "./ui/button";
 import {
@@ -18,6 +19,45 @@ export interface SshPasswordPromptRequestPresentation {
   readonly username: string | null;
   readonly prompt: string;
   readonly expiresAt: string;
+}
+
+export function useSshPasswordRequest() {
+  const [prompt, setPrompt] = useState<SourceControlSshPasswordPromptRequest | null>(null);
+  const pendingRef = useRef<{
+    readonly requestId: string;
+    readonly resolve: (password: string | null) => void;
+  } | null>(null);
+
+  const request = useCallback(
+    (nextPrompt: SourceControlSshPasswordPromptRequest) =>
+      new Promise<string | null>((resolve) => {
+        pendingRef.current?.resolve(null);
+        pendingRef.current = { requestId: nextPrompt.requestId, resolve };
+        setPrompt(nextPrompt);
+      }),
+    [],
+  );
+
+  const resolve = useCallback((requestId: string, password: string | null) => {
+    const pending = pendingRef.current;
+    if (pending?.requestId !== requestId) {
+      return;
+    }
+    pendingRef.current = null;
+    setPrompt(null);
+    pending.resolve(password);
+  }, []);
+
+  const cancel = useCallback(() => {
+    const pending = pendingRef.current;
+    pendingRef.current = null;
+    setPrompt(null);
+    pending?.resolve(null);
+  }, []);
+
+  useEffect(() => () => pendingRef.current?.resolve(null), []);
+
+  return { prompt, request, resolve, cancel } as const;
 }
 
 function describeSshTarget(request: SshPasswordPromptRequestPresentation): string {

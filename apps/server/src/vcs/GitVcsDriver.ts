@@ -45,6 +45,7 @@ export interface ExecuteGitInput {
   readonly maxOutputBytes?: number;
   readonly appendTruncationMarker?: boolean;
   readonly progress?: ExecuteGitProgress;
+  readonly sshAuthentication?: GitSshAuthentication;
 }
 
 export interface ExecuteGitResult {
@@ -124,10 +125,12 @@ export interface GitPushResult {
 
 export interface GitPushOptions {
   readonly remoteName?: string | null;
-  readonly sshAuthentication?: {
-    readonly destination: string;
-    readonly username?: string | null;
-  };
+  readonly sshAuthentication?: GitSshAuthentication;
+}
+
+export interface GitSshAuthentication {
+  readonly destination: string;
+  readonly username?: string | null;
 }
 
 export interface GitRangeContext {

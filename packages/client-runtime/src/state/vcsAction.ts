@@ -17,13 +17,14 @@ import { AsyncResult, Atom, type AtomRegistry } from "effect/unstable/reactivity
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { runStream } from "../rpc/client.ts";
+import { config as environmentConfig, runStream } from "../rpc/client.ts";
 import {
   createRuntimeCommand,
-  runStreamInEnvironment,
+  runInEnvironment,
   type AtomCommand,
   type AtomCommandResult,
 } from "./runtime.ts";
+import { resolveSshPasswordPrompt, type SshPasswordPromptHandler } from "./sshPasswordPrompts.ts";
 import { vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import { invalidateCachedVcsRefs } from "./vcsRefInvalidation.ts";
 
@@ -77,6 +78,7 @@ export interface RunVcsStackedActionInput {
   readonly featureBranch?: boolean;
   readonly filePaths?: ReadonlyArray<string>;
   readonly onProgress?: (event: GitActionProgressEvent) => void;
+  readonly onSshPasswordPrompt?: SshPasswordPromptHandler;
 }
 
 export class VcsActionUnavailableError extends Schema.TaggedErrorClass<VcsActionUnavailableError>()(
@@ -253,7 +255,7 @@ export function normalizeVcsActionProgressEvent(
   };
 }
 
-export function consumeVcsActionProgress<E, R>(
+export function consumeVcsActionProgress<E, R, PromptError = never, PromptRequirements = never>(
   stream: Stream.Stream<GitActionProgressEvent, E, R>,
   input: {
     readonly target: ResolvedVcsActionTarget;
@@ -261,12 +263,25 @@ export function consumeVcsActionProgress<E, R>(
     readonly actionId: string;
     readonly action: GitStackedAction;
     readonly onProgress: (event: GitActionProgressEvent) => Effect.Effect<void>;
+    readonly resolveSshPasswordPrompt?: (
+      request: Extract<GitActionProgressEvent, { readonly kind: "ssh_password_prompt" }>["request"],
+    ) => Effect.Effect<void, PromptError, PromptRequirements>;
   },
-): Effect.Effect<GitRunStackedActionResult, E | VcsActionExecutionError, R> {
+): Effect.Effect<
+  GitRunStackedActionResult,
+  E | PromptError | VcsActionExecutionError,
+  R | PromptRequirements
+> {
   return Effect.suspend(() => {
     let terminalEvent: GitActionProgressEvent | null = null;
     return stream.pipe(
       Stream.runForEach((event) => {
+        if (event.kind === "ssh_password_prompt") {
+          if (event.actionId !== input.transportActionId || event.cwd !== input.target.cwd) {
+            return Effect.void;
+          }
+          return input.resolveSshPasswordPrompt?.(event.request) ?? Effect.void;
+        }
         const normalized = normalizeVcsActionProgressEvent(
           input.target,
           input.transportActionId,
@@ -401,6 +416,8 @@ export function applyVcsActionProgressEvent(
         operation: "run_change_request",
         error: event.message,
       };
+    case "ssh_password_prompt":
+      return current;
   }
 }
 
@@ -464,32 +481,43 @@ export function createVcsActionManager<R, E>(
           ...(input.featureBranch ? { featureBranch: true } : {}),
           ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),
         };
-        return consumeVcsActionProgress(
-          runStreamInEnvironment(
-            target.environmentId,
-            runStream(WS_METHODS.gitRunStackedAction, rpcInput),
-          ),
-          {
-            target,
-            transportActionId,
-            actionId: input.actionId,
-            action: input.action,
-            onProgress: (event) =>
-              Effect.sync(() => {
-                const current = registry.get(stateAtom);
-                if (current.actionId !== input.actionId) {
-                  return;
-                }
-                registry.set(stateAtom, applyVcsActionProgressEvent(current, event));
-                if (input.onProgress !== undefined) {
-                  try {
-                    input.onProgress(event);
-                  } catch {
-                    // Presentation callbacks must not fail the source-control operation.
+        return runInEnvironment(
+          target.environmentId,
+          Effect.gen(function* () {
+            const method =
+              input.onSshPasswordPrompt !== undefined &&
+              (yield* environmentConfig).environment.capabilities
+                .sourceControlSshPasswordPrompts === true
+                ? WS_METHODS.gitRunStackedActionWithPrompts
+                : WS_METHODS.gitRunStackedAction;
+            return yield* consumeVcsActionProgress(runStream(method, rpcInput), {
+              target,
+              transportActionId,
+              actionId: input.actionId,
+              action: input.action,
+              ...(input.onSshPasswordPrompt === undefined
+                ? {}
+                : {
+                    resolveSshPasswordPrompt: (request) =>
+                      resolveSshPasswordPrompt(request, input.onSshPasswordPrompt!),
+                  }),
+              onProgress: (event) =>
+                Effect.sync(() => {
+                  const current = registry.get(stateAtom);
+                  if (current.actionId !== input.actionId) {
+                    return;
                   }
-                }
-              }),
-          },
+                  registry.set(stateAtom, applyVcsActionProgressEvent(current, event));
+                  if (input.onProgress !== undefined) {
+                    try {
+                      input.onProgress(event);
+                    } catch {
+                      // Presentation callbacks must not fail the source-control operation.
+                    }
+                  }
+                }),
+            });
+          }),
         ).pipe(
           Effect.ensuring(invalidateCachedVcsRefs(registry, target)),
           Effect.tapError((error) =>
