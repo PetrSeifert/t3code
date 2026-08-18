@@ -1,8 +1,11 @@
-import { describe, expect, it } from "@effect/vitest";
+import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 
 import type { SourceControlSshPasswordPromptRequest } from "@t3tools/contracts";
 
-import { createSshPasswordPromptBroker } from "./sshPasswordPromptBroker";
+import {
+  createSshPasswordPromptBroker,
+  type PresentedSshPasswordPromptRequest,
+} from "./sshPasswordPromptBroker";
 
 const request = (requestId: string): SourceControlSshPasswordPromptRequest => ({
   requestId,
@@ -15,6 +18,34 @@ const request = (requestId: string): SourceControlSshPasswordPromptRequest => ({
 });
 
 describe("mobile SSH password prompt broker", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a queued prompt's original receipt time when it becomes visible", async () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValueOnce(1_000).mockReturnValueOnce(2_000).mockReturnValue(5_000);
+    const broker = createSshPasswordPromptBroker();
+    const presented: PresentedSshPasswordPromptRequest[] = [];
+    broker.subscribe((current) => {
+      if (current !== null) {
+        presented.push(current);
+      }
+    });
+    const firstSession = broker.createSession();
+    const secondSession = broker.createSession();
+
+    const firstPassword = firstSession.request(request("first"));
+    const secondPassword = secondSession.request(request("second"));
+    broker.resolveCurrent("first", "first secret");
+    await firstPassword;
+
+    expect(presented[1]?.requestId).toBe("second");
+    expect(presented[1]?.receivedAtMs).toBe(2_000);
+    broker.resolveCurrent("second", "second secret");
+    await secondPassword;
+  });
+
   it("queues prompts from independent operations", async () => {
     const broker = createSshPasswordPromptBroker();
     let currentRequestId: string | null = null;

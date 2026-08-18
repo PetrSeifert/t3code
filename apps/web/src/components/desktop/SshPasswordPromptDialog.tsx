@@ -1,10 +1,13 @@
-import type { DesktopSshPasswordPromptRequest } from "@t3tools/contracts";
 import { useEffect, useState } from "react";
 
 import { SshPasswordRequestDialog } from "../SshPasswordRequestDialog";
+import {
+  enqueueDesktopSshPasswordPrompt,
+  type QueuedDesktopSshPasswordPromptRequest,
+} from "./sshPasswordPromptQueue";
 
 export function SshPasswordPromptDialog() {
-  const [queue, setQueue] = useState<readonly DesktopSshPasswordPromptRequest[]>([]);
+  const [queue, setQueue] = useState<readonly QueuedDesktopSshPasswordPromptRequest[]>([]);
   const currentRequest = queue[0] ?? null;
 
   useEffect(() => {
@@ -14,7 +17,10 @@ export function SshPasswordPromptDialog() {
     }
 
     return bridge.onSshPasswordPrompt((request) => {
-      setQueue((currentQueue) => [...currentQueue, request]);
+      const receivedAtMs = Date.now();
+      setQueue((currentQueue) =>
+        enqueueDesktopSshPasswordPrompt(currentQueue, request, receivedAtMs),
+      );
     });
   }, []);
 

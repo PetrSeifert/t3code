@@ -1,27 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 import { Modal, Pressable, View } from "react-native";
 
-import type { SourceControlSshPasswordPromptRequest } from "@t3tools/contracts";
-
 import { useThemeColor } from "../lib/useThemeColor";
 import { AppText, AppTextInput } from "./AppText";
-import { sshPasswordPromptBroker } from "./sshPasswordPromptBroker";
+import {
+  type PresentedSshPasswordPromptRequest,
+  sshPasswordPromptBroker,
+} from "./sshPasswordPromptBroker";
 import { getSshPasswordPromptTiming } from "./sshPasswordPromptTiming";
 
 export function SshPasswordPromptHost() {
-  const [prompt, setPrompt] = useState<SourceControlSshPasswordPromptRequest | null>(null);
+  const [prompt, setPrompt] = useState<PresentedSshPasswordPromptRequest | null>(null);
   const [password, setPassword] = useState("");
-  const [receivedAtMs, setReceivedAtMs] = useState(() => Date.now());
-  const [now, setNow] = useState(receivedAtMs);
+  const [now, setNow] = useState(() => Date.now());
   const pressedOverlay = useThemeColor("--color-subtle");
 
   useEffect(
     () =>
       sshPasswordPromptBroker.subscribe((nextPrompt) => {
-        const nextReceivedAtMs = Date.now();
         setPassword("");
-        setReceivedAtMs(nextReceivedAtMs);
-        setNow(nextReceivedAtMs);
+        setNow(Date.now());
         setPrompt(nextPrompt);
       }),
     [],
@@ -40,7 +38,9 @@ export function SshPasswordPromptHost() {
   }, [prompt]);
 
   const timing =
-    prompt === null ? null : getSshPasswordPromptTiming(prompt.expiresInMs, receivedAtMs, now);
+    prompt === null
+      ? null
+      : getSshPasswordPromptTiming(prompt.expiresInMs, prompt.receivedAtMs, now);
   const isExpired = timing?.isExpired ?? false;
   const continueDisabled = password.length === 0 || isExpired;
 

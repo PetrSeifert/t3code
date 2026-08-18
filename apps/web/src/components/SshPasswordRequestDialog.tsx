@@ -20,6 +20,7 @@ export interface SshPasswordPromptRequestPresentation {
   readonly username: string | null;
   readonly prompt: string;
   readonly expiresInMs: number;
+  readonly receivedAtMs?: number;
 }
 
 export function useSshPasswordRequest() {
@@ -87,8 +88,8 @@ export function SshPasswordRequestDialog({
 }) {
   const [password, setPassword] = useState("");
   const [isResponding, setIsResponding] = useState(false);
-  const [receivedAtMs] = useState(() => Date.now());
-  const [now, setNow] = useState(receivedAtMs);
+  const [mountedAtMs] = useState(() => Date.now());
+  const [now, setNow] = useState(mountedAtMs);
   const [responseError, setResponseError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isRespondingRef = useRef(false);
@@ -116,7 +117,7 @@ export function SshPasswordRequestDialog({
   const remainingMs = getSshPasswordPromptRemainingMs({
     expiresInMs: request.expiresInMs,
     nowMs: now,
-    receivedAtMs,
+    receivedAtMs: request.receivedAtMs ?? mountedAtMs,
   });
   const isExpired = remainingMs <= 0;
   const remainingSeconds = Math.ceil(remainingMs / 1_000);

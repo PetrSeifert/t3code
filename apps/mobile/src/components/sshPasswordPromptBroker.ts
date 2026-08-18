@@ -1,8 +1,12 @@
 import type { SourceControlSshPasswordPromptRequest } from "@t3tools/contracts";
 
+export type PresentedSshPasswordPromptRequest = SourceControlSshPasswordPromptRequest & {
+  readonly receivedAtMs: number;
+};
+
 type PendingSshPasswordPrompt = {
   readonly owner: symbol;
-  readonly request: SourceControlSshPasswordPromptRequest;
+  readonly request: PresentedSshPasswordPromptRequest;
   readonly resolve: (password: string | null) => void;
 };
 
@@ -13,7 +17,7 @@ export interface SshPasswordPromptSession {
 
 export function createSshPasswordPromptBroker() {
   let pending: PendingSshPasswordPrompt[] = [];
-  let subscriber: ((request: SourceControlSshPasswordPromptRequest | null) => void) | null = null;
+  let subscriber: ((request: PresentedSshPasswordPromptRequest | null) => void) | null = null;
 
   const publishCurrent = () => {
     subscriber?.(pending[0]?.request ?? null);
@@ -31,7 +35,11 @@ export function createSshPasswordPromptBroker() {
             return;
           }
           const wasEmpty = pending.length === 0;
-          pending.push({ owner, request, resolve });
+          pending.push({
+            owner,
+            request: { ...request, receivedAtMs: Date.now() },
+            resolve,
+          });
           if (wasEmpty) {
             publishCurrent();
           }
@@ -65,7 +73,7 @@ export function createSshPasswordPromptBroker() {
   };
 
   const subscribe = (
-    nextSubscriber: (request: SourceControlSshPasswordPromptRequest | null) => void,
+    nextSubscriber: (request: PresentedSshPasswordPromptRequest | null) => void,
   ): (() => void) => {
     subscriber = nextSubscriber;
     publishCurrent();
