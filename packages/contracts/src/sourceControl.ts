@@ -110,6 +110,7 @@ export const SourceControlSshPasswordPromptRequest = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   attempt: PositiveInt,
   expiresAt: TrimmedNonEmptyString,
+  expiresInMs: PositiveInt,
 });
 export type SourceControlSshPasswordPromptRequest =
   typeof SourceControlSshPasswordPromptRequest.Type;

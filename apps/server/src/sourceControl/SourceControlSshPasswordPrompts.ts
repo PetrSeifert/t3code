@@ -80,6 +80,7 @@ export const make = Effect.fn("SourceControlSshPasswordPrompts.make")(function* 
               prompt: input.prompt,
               attempt: input.attempt,
               expiresAt: DateTime.formatIso(DateTime.add(now, { milliseconds: promptTimeoutMs })),
+              expiresInMs: promptTimeoutMs,
             });
 
             return yield* Deferred.await(deferred).pipe(

@@ -12,14 +12,14 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { canSubmitSshPassword } from "./sshPasswordRequestForm";
+import { canSubmitSshPassword, getSshPasswordPromptRemainingMs } from "./sshPasswordRequestForm";
 
 export interface SshPasswordPromptRequestPresentation {
   readonly requestId: string;
   readonly destination: string;
   readonly username: string | null;
   readonly prompt: string;
-  readonly expiresAt: string;
+  readonly expiresInMs: number;
 }
 
 export function useSshPasswordRequest() {
@@ -87,7 +87,8 @@ export function SshPasswordRequestDialog({
 }) {
   const [password, setPassword] = useState("");
   const [isResponding, setIsResponding] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
+  const [receivedAtMs] = useState(() => Date.now());
+  const [now, setNow] = useState(receivedAtMs);
   const [responseError, setResponseError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const isRespondingRef = useRef(false);
@@ -112,12 +113,14 @@ export function SshPasswordRequestDialog({
     };
   }, []);
 
-  const expiresAtMs = Date.parse(request.expiresAt);
-  const remainingMs = Number.isFinite(expiresAtMs) ? Math.max(0, expiresAtMs - now) : null;
-  const isExpired = remainingMs !== null && remainingMs <= 0;
-  const remainingSeconds = remainingMs === null ? null : Math.ceil(remainingMs / 1_000);
-  const remainingLabel =
-    remainingSeconds === null ? null : formatRemainingSeconds(remainingSeconds);
+  const remainingMs = getSshPasswordPromptRemainingMs({
+    expiresInMs: request.expiresInMs,
+    nowMs: now,
+    receivedAtMs,
+  });
+  const isExpired = remainingMs <= 0;
+  const remainingSeconds = Math.ceil(remainingMs / 1_000);
+  const remainingLabel = formatRemainingSeconds(remainingSeconds);
   const visibleResponseError = isExpired
     ? "This SSH password prompt expired. Try again."
     : responseError;

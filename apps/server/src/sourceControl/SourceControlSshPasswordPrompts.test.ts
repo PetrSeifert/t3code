@@ -27,6 +27,7 @@ it.effect("routes a source-control SSH prompt response back to the waiting publi
 
     assert.equal(request.destination, "git@github.com:octocat/t3code.git");
     assert.equal(request.attempt, 1);
+    assert.equal(request.expiresInMs, 3 * 60 * 1_000);
     yield* prompts.resolve({
       requestId: request.requestId,
       password: "correct horse battery staple",

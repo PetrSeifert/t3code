@@ -9,19 +9,11 @@ function formatRemainingSeconds(seconds: number): string {
 }
 
 export function getSshPasswordPromptTiming(
-  expiresAt: string,
+  expiresInMs: number,
+  receivedAtMs: number,
   nowMs: number,
 ): SshPasswordPromptTiming {
-  const expiresAtMs = Date.parse(expiresAt);
-  if (!Number.isFinite(expiresAtMs)) {
-    return {
-      isExpired: false,
-      remainingLabel: null,
-      remainingSeconds: null,
-    };
-  }
-
-  const remainingMs = Math.max(0, expiresAtMs - nowMs);
+  const remainingMs = Math.max(0, receivedAtMs + expiresInMs - nowMs);
   const remainingSeconds = Math.ceil(remainingMs / 1_000);
   return {
     isExpired: remainingMs <= 0,

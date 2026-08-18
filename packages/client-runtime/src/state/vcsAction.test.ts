@@ -363,6 +363,7 @@ describe("vcsActionState", () => {
             prompt: "Enter the SSH key passphrase or password.",
             attempt: 1,
             expiresAt: "2026-08-17T10:00:00.000Z",
+            expiresInMs: 3 * 60 * 1_000,
           },
         },
         {
@@ -464,6 +465,7 @@ describe("vcsActionState", () => {
               prompt: "Enter the SSH key passphrase or password.",
               attempt: 1,
               expiresAt: "2026-08-17T10:00:00.000Z",
+              expiresInMs: 3 * 60 * 1_000,
             },
           },
           {

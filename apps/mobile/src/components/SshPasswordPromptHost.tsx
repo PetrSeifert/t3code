@@ -11,14 +11,17 @@ import { getSshPasswordPromptTiming } from "./sshPasswordPromptTiming";
 export function SshPasswordPromptHost() {
   const [prompt, setPrompt] = useState<SourceControlSshPasswordPromptRequest | null>(null);
   const [password, setPassword] = useState("");
-  const [now, setNow] = useState(() => Date.now());
+  const [receivedAtMs, setReceivedAtMs] = useState(() => Date.now());
+  const [now, setNow] = useState(receivedAtMs);
   const pressedOverlay = useThemeColor("--color-subtle");
 
   useEffect(
     () =>
       sshPasswordPromptBroker.subscribe((nextPrompt) => {
+        const nextReceivedAtMs = Date.now();
         setPassword("");
-        setNow(Date.now());
+        setReceivedAtMs(nextReceivedAtMs);
+        setNow(nextReceivedAtMs);
         setPrompt(nextPrompt);
       }),
     [],
@@ -36,7 +39,8 @@ export function SshPasswordPromptHost() {
     };
   }, [prompt]);
 
-  const timing = prompt === null ? null : getSshPasswordPromptTiming(prompt.expiresAt, now);
+  const timing =
+    prompt === null ? null : getSshPasswordPromptTiming(prompt.expiresInMs, receivedAtMs, now);
   const isExpired = timing?.isExpired ?? false;
   const continueDisabled = password.length === 0 || isExpired;
 
