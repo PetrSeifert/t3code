@@ -358,6 +358,12 @@ function splitNullSeparatedPaths(input: string, truncated: boolean): string[] {
   return parts.filter((value) => value.length > 0);
 }
 
+function parseCheckpointStatusPaths(output: string): string[] {
+  return splitNullSeparatedPaths(output, false).flatMap((entry) =>
+    entry.length > 3 && entry[2] === " " ? [entry.slice(3)] : [],
+  );
+}
+
 function chunkPathsForGitCheckIgnore(relativePaths: ReadonlyArray<string>): string[][] {
   const chunks: string[][] = [];
   let chunk: string[] = [];
@@ -708,10 +714,18 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       return path.isAbsolute(gitCommonDir) ? gitCommonDir : path.resolve(cwd, gitCommonDir);
     });
 
+  const resolveRepositoryRoot = (cwd: string) =>
+    execute({
+      operation: "GitVcsDriver.checkpoints.resolveRepositoryRoot",
+      cwd,
+      args: ["rev-parse", "--show-toplevel"],
+    }).pipe(Effect.map((result) => result.stdout.trim()));
+
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
       const operation = "GitVcsDriver.checkpoints.captureCheckpoint";
       const gitCommonDir = yield* resolveGitCommonDir(input.cwd);
+      const repositoryRoot = yield* resolveRepositoryRoot(input.cwd);
       const tempIndexPath = path.join(
         gitCommonDir,
         `t3-checkpoint-index-${NodeCrypto.randomUUID()}`,
@@ -731,21 +745,57 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
 
       yield* Effect.gen(function* () {
         const headExists = yield* hasHeadCommit(input.cwd);
-        if (headExists) {
-          yield* execute({
-            operation,
-            cwd: input.cwd,
-            args: ["read-tree", "HEAD"],
-            env: commitEnv,
-          });
-        }
-
         yield* execute({
           operation,
           cwd: input.cwd,
-          args: ["add", "-A", "--", "."],
+          args: headExists ? ["read-tree", "HEAD"] : ["read-tree", "--empty"],
           env: commitEnv,
         });
+
+        const statusResult = yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: [
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+            "--",
+            ".",
+          ],
+          env: {
+            ...process.env,
+            GIT_OPTIONAL_LOCKS: "0",
+          },
+          maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+        });
+
+        if (statusResult.stdoutTruncated) {
+          yield* execute({
+            operation,
+            cwd: input.cwd,
+            args: ["add", "-A", "--", "."],
+            env: commitEnv,
+          });
+        } else {
+          const changedPaths = parseCheckpointStatusPaths(statusResult.stdout);
+          if (changedPaths.length > 0) {
+            yield* execute({
+              operation,
+              cwd: repositoryRoot,
+              args: [
+                "--literal-pathspecs",
+                "add",
+                "-A",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+              ],
+              stdin: `${changedPaths.join("\0")}\0`,
+              env: commitEnv,
+            });
+          }
+        }
 
         const writeTreeResult = yield* execute({
           operation,
