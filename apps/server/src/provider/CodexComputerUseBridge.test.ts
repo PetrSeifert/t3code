@@ -6,6 +6,7 @@ import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Deferred from "effect/Deferred";
@@ -46,12 +47,20 @@ interface ShimSky {
 
 let shimImportId = 0;
 
+interface ExecutableShimOptions {
+  readonly requireApproval: boolean;
+  readonly approvalPersistence?: "session" | "always";
+  readonly failedConnectionAttempts?: number;
+  readonly dropFirstRequestWithPartialResponse?: boolean;
+}
+
 async function withExecutableShim(
-  requireApproval: boolean,
+  options: ExecutableShimOptions,
   run: (context: {
     readonly sky: ShimSky;
     readonly requests: ReadonlyArray<ShimPipeRequest>;
     readonly elicitations: ReadonlyArray<ShimElicitation>;
+    readonly connectionAttempts: () => number;
   }) => Promise<void>,
 ): Promise<void> {
   const previousNodeRepl = Object.getOwnPropertyDescriptor(globalThis, "nodeRepl");
@@ -61,17 +70,27 @@ async function withExecutableShim(
   let onData: ((chunk: Uint8Array) => void) | undefined;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  let connectionAttempts = 0;
+  let onClose: (() => void) | undefined;
   const connection = {
     on(event: string, listener: (value: Uint8Array) => void) {
       if (event === "data") onData = listener;
+      if (event === "close") onClose = listener as () => void;
       return connection;
     },
     write(chunk: Uint8Array) {
       const request = JSON.parse(decoder.decode(chunk)) as ShimPipeRequest;
       requests.push(request);
+      if (options.dropFirstRequestWithPartialResponse === true && requests.length === 1) {
+        queueMicrotask(() => {
+          onData?.(encoder.encode('{"id":'));
+          onClose?.();
+        });
+        return true;
+      }
       const approved = request.meta["x-oai-cua-approved-app"] === "t3code.exe";
       const response =
-        requireApproval && !approved
+        options.requireApproval && !approved
           ? {
               id: request.id,
               ok: false,
@@ -84,7 +103,7 @@ async function withExecutableShim(
           : {
               id: request.id,
               ok: true,
-              result: requireApproval
+              result: options.requireApproval
                 ? { screenshots: [], text: "approved" }
                 : [{ name: "T3 Code" }],
             };
@@ -97,10 +116,21 @@ async function withExecutableShim(
     configurable: true,
     value: {
       requestMeta: { session_id: "session-1", turn_id: "turn-1" },
-      nativePipe: { createConnection: async () => connection },
+      nativePipe: {
+        createConnection: async () => {
+          connectionAttempts += 1;
+          if (connectionAttempts <= (options.failedConnectionAttempts ?? 0)) {
+            throw new Error("Computer Use pipe is not ready");
+          }
+          return connection;
+        },
+      },
       createElicitation: async (request: ShimElicitation) => {
         elicitations.push(request);
-        return { action: "accept" };
+        return {
+          action: "accept",
+          _meta: { persist: options.approvalPersistence ?? "session" },
+        };
       },
       emitImage: async () => undefined,
     },
@@ -110,7 +140,12 @@ async function withExecutableShim(
   try {
     const moduleUrl = `data:text/javascript;base64,${Buffer.from(COMPUTER_USE_SHIM_SOURCE).toString("base64")}#executable-shim-${++shimImportId}`;
     const loaded = (await import(moduleUrl)) as unknown as { readonly sky: ShimSky };
-    await run({ sky: loaded.sky, requests, elicitations });
+    await run({
+      sky: loaded.sky,
+      requests,
+      elicitations,
+      connectionAttempts: () => connectionAttempts,
+    });
   } finally {
     if (previousNodeRepl) {
       Object.defineProperty(globalThis, "nodeRepl", previousNodeRepl);
@@ -220,7 +255,7 @@ function connectNamedPipe(pipePath: string): Promise<void> {
 
 describe("CodexComputerUseBridge", () => {
   it("routes list_apps through the trusted native-pipe shim", () =>
-    withExecutableShim(false, async ({ sky, requests }) => {
+    withExecutableShim({ requireApproval: false }, async ({ sky, requests }) => {
       NodeAssert.deepStrictEqual(await sky.list_apps(), [{ name: "T3 Code" }]);
       NodeAssert.deepStrictEqual(requests, [
         {
@@ -236,7 +271,7 @@ describe("CodexComputerUseBridge", () => {
     }));
 
   it("requests approval and retries the same helper call with approval metadata", () =>
-    withExecutableShim(true, async ({ sky, requests, elicitations }) => {
+    withExecutableShim({ requireApproval: true }, async ({ sky, requests, elicitations }) => {
       NodeAssert.deepStrictEqual(
         await sky.get_window_state({
           window: { id: 7 },
@@ -266,6 +301,47 @@ describe("CodexComputerUseBridge", () => {
       NodeAssert.equal(requests[1]?.meta["x-oai-cua-approved-app"], "t3code.exe");
     }));
 
+  it("retries the native pipe connection after an initial failure", () =>
+    withExecutableShim(
+      { requireApproval: false, failedConnectionAttempts: 1 },
+      async ({ sky, requests, connectionAttempts }) => {
+        await NodeAssert.rejects(sky.list_apps(), /Computer Use pipe is not ready/);
+        NodeAssert.deepStrictEqual(await sky.list_apps(), [{ name: "T3 Code" }]);
+        NodeAssert.equal(connectionAttempts(), 2);
+        NodeAssert.equal(requests.length, 1);
+      },
+    ));
+
+  it("discards partial responses when reconnecting", () =>
+    withExecutableShim(
+      { requireApproval: false, dropFirstRequestWithPartialResponse: true },
+      async ({ sky, requests, connectionAttempts }) => {
+        await NodeAssert.rejects(sky.list_apps(), /Computer Use pipe closed/);
+        NodeAssert.deepStrictEqual(await sky.list_apps(), [{ name: "T3 Code" }]);
+        NodeAssert.equal(connectionAttempts(), 2);
+        NodeAssert.equal(requests.length, 2);
+      },
+    ));
+
+  it("remembers always-allow approval for later calls", () =>
+    withExecutableShim(
+      { requireApproval: true, approvalPersistence: "always" },
+      async ({ sky, requests, elicitations }) => {
+        const input = {
+          window: { id: 7 },
+          include_screenshot: false,
+          include_text: true,
+        };
+        await sky.get_window_state(input);
+        await sky.get_window_state(input);
+
+        NodeAssert.equal(elicitations.length, 1);
+        NodeAssert.equal(requests.length, 4);
+        NodeAssert.equal(requests[1]?.meta["x-oai-cua-approved-app"], "t3code.exe");
+        NodeAssert.equal(requests[3]?.meta["x-oai-cua-approved-app"], "t3code.exe");
+      },
+    ));
+
   it("pins trust to the exact embedded shim bytes", () => {
     NodeAssert.equal(
       COMPUTER_USE_SHIM_SHA256,
@@ -289,7 +365,7 @@ describe("CodexComputerUseBridge", () => {
           );
         }),
       (codexHome) => Effect.promise(() => NodeFSP.rm(codexHome, { recursive: true, force: true })),
-    ),
+    ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("proxies a named-pipe request and closes the scoped helper", () =>
@@ -327,6 +403,7 @@ describe("CodexComputerUseBridge", () => {
                   HostProcessPlatform,
                   NodePath.sep === "\\" ? "win32" : "linux",
                 ),
+                Effect.provide(NodeServices.layer),
               );
               NodeAssert.ok(config);
 
@@ -380,6 +457,6 @@ describe("CodexComputerUseBridge", () => {
           );
         }),
       (root) => Effect.promise(() => NodeFSP.rm(root, { recursive: true, force: true })),
-    ),
+    ).pipe(Effect.provide(NodeServices.layer)),
   );
 });

@@ -2,18 +2,18 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeNet from "node:net";
 import * as NodeOS from "node:os";
 
-import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
-import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeSink from "@effect/platform-node/NodeSink";
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as FiberSet from "effect/FiberSet";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -30,8 +30,6 @@ const COMPUTER_USE_SHIM_PACKAGE_JSON = `${JSON.stringify({
   type: "module",
   exports: "./index.js",
 })}\n`;
-const ComputerUseFileSystemLayer = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer);
-
 // Codex trusts this module by its exact SHA-256. Keep it self-contained so
 // importing the shim does not expand the trusted module graph.
 export const COMPUTER_USE_SHIM_SOURCE = String.raw`const nodeRepl = globalThis.nodeRepl;
@@ -133,30 +131,37 @@ const handleLine = (line) => {
 
 const getConnection = async () => {
   if (!connectionPromise) {
-    connectionPromise = nodeRepl.nativePipe.createConnection(pipePath).then((connection) => {
-      connection.on("data", (chunk) => {
-        receiveBuffer += decoder.decode(chunk, { stream: true });
-        for (;;) {
-          const newline = receiveBuffer.indexOf("\n");
-          if (newline < 0) break;
-          const line = receiveBuffer.slice(0, newline).trim();
-          receiveBuffer = receiveBuffer.slice(newline + 1);
-          if (line) handleLine(line);
-        }
-      });
-      const rejectAll = (reason) => {
-        const message = sanitizeError(reason || "Computer Use pipe closed");
+    connectionPromise = nodeRepl.nativePipe
+      .createConnection(pipePath)
+      .then((connection) => {
+        connection.on("data", (chunk) => {
+          receiveBuffer += decoder.decode(chunk, { stream: true });
+          for (;;) {
+            const newline = receiveBuffer.indexOf("\n");
+            if (newline < 0) break;
+            const line = receiveBuffer.slice(0, newline).trim();
+            receiveBuffer = receiveBuffer.slice(newline + 1);
+            if (line) handleLine(line);
+          }
+        });
+        const rejectAll = (reason) => {
+          const message = sanitizeError(reason || "Computer Use pipe closed");
+          connectionPromise = undefined;
+          receiveBuffer = "";
+          for (const waiter of pending.values()) {
+            clearTimeout(waiter.timeout);
+            waiter.reject(new Error(message));
+          }
+          pending.clear();
+        };
+        connection.on("error", rejectAll);
+        connection.on("close", () => rejectAll("Computer Use pipe closed"));
+        return connection;
+      })
+      .catch((error) => {
         connectionPromise = undefined;
-        for (const waiter of pending.values()) {
-          clearTimeout(waiter.timeout);
-          waiter.reject(new Error(message));
-        }
-        pending.clear();
-      };
-      connection.on("error", rejectAll);
-      connection.on("close", () => rejectAll("Computer Use pipe closed"));
-      return connection;
-    });
+        throw error;
+      });
   }
   return connectionPromise;
 };
@@ -224,7 +229,12 @@ const invoke = async (method, rawParams) => {
       if (decision?.action !== "accept") {
         throw new Error("Computer Use was not approved to use " + displayName);
       }
-      if (decision?._meta?.persist === "session") sessionApprovedScopes.add(approvalScope);
+      if (
+        decision?._meta?.persist === "session" ||
+        decision?._meta?.persist === "always"
+      ) {
+        sessionApprovedScopes.add(approvalScope);
+      }
     }
 
     const approvedMetadata = inertClone(metadata, "Computer Use metadata");
@@ -325,11 +335,35 @@ export interface CodexComputerUseBridgeInput {
 export class CodexComputerUseBridgeError extends Schema.TaggedErrorClass<CodexComputerUseBridgeError>()(
   "CodexComputerUseBridgeError",
   {
+    operation: Schema.Literals(["listen", "read", "write"]),
+    pipePath: Schema.String,
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
-    return "Failed to start the T3 Computer Use bridge";
+    return `Failed to ${this.operation} the T3 Computer Use bridge pipe at '${this.pipePath}'.`;
+  }
+}
+
+export class ComputerUseShimFileSystemError extends Schema.TaggedErrorClass<ComputerUseShimFileSystemError>()(
+  "ComputerUseShimFileSystemError",
+  {
+    operation: Schema.Literals(["makeDirectory", "read", "write", "link"]),
+    path: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Failed to ${this.operation} the T3 Computer Use shim at '${this.path}'.`;
+  }
+}
+
+export class ComputerUseShimMismatchError extends Schema.TaggedErrorClass<ComputerUseShimMismatchError>()(
+  "ComputerUseShimMismatchError",
+  { path: Schema.String },
+) {
+  override get message(): string {
+    return `Refusing to use mismatched Computer Use shim at '${this.path}'.`;
   }
 }
 
@@ -344,68 +378,107 @@ export const findComputerUseHelper = Effect.fn("findComputerUseHelper")(function
     if (Option.isSome(info) && info.value.type === "File") return candidate;
   }
   return undefined;
-}, Effect.provide(ComputerUseFileSystemLayer));
+});
 
 const writeFileExactly = Effect.fn("writeFileExactly")(function* (
   filePath: string,
   content: string,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
-  const existing = yield* fileSystem.readFileString(filePath).pipe(Effect.option);
+  const existing = yield* fileSystem.readFileString(filePath).pipe(
+    Effect.map(Option.some),
+    Effect.catchTags({
+      PlatformError: (cause) =>
+        cause.reason._tag === "NotFound"
+          ? Effect.succeed(Option.none<string>())
+          : new ComputerUseShimFileSystemError({
+              operation: "read",
+              path: filePath,
+              cause,
+            }),
+    }),
+  );
   if (Option.isSome(existing)) {
     if (existing.value !== content) {
-      return yield* new CodexComputerUseBridgeError({
-        cause: `Refusing to use mismatched Computer Use shim: ${filePath}`,
-      });
+      return yield* new ComputerUseShimMismatchError({ path: filePath });
     }
     return;
   }
 
   const temporaryPath = `${filePath}.${NodeCrypto.randomUUID()}.tmp`;
-  yield* fileSystem.writeFileString(temporaryPath, content, { flag: "wx" });
+  yield* fileSystem.writeFileString(temporaryPath, content, { flag: "wx" }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ComputerUseShimFileSystemError({
+          operation: "write",
+          path: temporaryPath,
+          cause,
+        }),
+    ),
+  );
   yield* fileSystem.link(temporaryPath, filePath).pipe(
-    Effect.catchIf(
-      (error) => error.reason._tag === "AlreadyExists",
-      () =>
-        fileSystem.readFileString(filePath).pipe(
+    Effect.catchTags({
+      PlatformError: (cause) => {
+        if (cause.reason._tag !== "AlreadyExists") {
+          return new ComputerUseShimFileSystemError({
+            operation: "link",
+            path: filePath,
+            cause,
+          });
+        }
+        return fileSystem.readFileString(filePath).pipe(
+          Effect.mapError(
+            (readCause) =>
+              new ComputerUseShimFileSystemError({
+                operation: "read",
+                path: filePath,
+                cause: readCause,
+              }),
+          ),
           Effect.flatMap((current) =>
             current === content
               ? Effect.void
-              : new CodexComputerUseBridgeError({
-                  cause: `Refusing to use mismatched Computer Use shim: ${filePath}`,
-                }),
+              : new ComputerUseShimMismatchError({ path: filePath }),
           ),
-        ),
-    ),
+        );
+      },
+    }),
     Effect.ensuring(fileSystem.remove(temporaryPath, { force: true }).pipe(Effect.ignore)),
   );
 });
 
-export const materializeComputerUseShim = Effect.fn("materializeComputerUseShim")(
-  function* (codexHome: string) {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const nodeModulesRoot = path.join(
-      codexHome,
-      "cache",
-      "t3-code",
-      "cua-shim",
-      COMPUTER_USE_SHIM_SHA256,
-      "node_modules",
-    );
-    const packageDirectory = path.join(nodeModulesRoot, "@oai", "sky");
-    yield* fileSystem.makeDirectory(packageDirectory, { recursive: true });
-    const entryPath = path.join(packageDirectory, "index.js");
-    yield* writeFileExactly(entryPath, COMPUTER_USE_SHIM_SOURCE);
-    yield* writeFileExactly(
-      path.join(packageDirectory, "package.json"),
-      COMPUTER_USE_SHIM_PACKAGE_JSON,
-    );
-    return { nodeModulesRoot, entryPath };
-  },
-  Effect.mapError((cause) => new CodexComputerUseBridgeError({ cause })),
-  Effect.provide(ComputerUseFileSystemLayer),
-);
+export const materializeComputerUseShim = Effect.fn("materializeComputerUseShim")(function* (
+  codexHome: string,
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const nodeModulesRoot = path.join(
+    codexHome,
+    "cache",
+    "t3-code",
+    "cua-shim",
+    COMPUTER_USE_SHIM_SHA256,
+    "node_modules",
+  );
+  const packageDirectory = path.join(nodeModulesRoot, "@oai", "sky");
+  yield* fileSystem.makeDirectory(packageDirectory, { recursive: true }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new ComputerUseShimFileSystemError({
+          operation: "makeDirectory",
+          path: packageDirectory,
+          cause,
+        }),
+    ),
+  );
+  const entryPath = path.join(packageDirectory, "index.js");
+  yield* writeFileExactly(entryPath, COMPUTER_USE_SHIM_SOURCE);
+  yield* writeFileExactly(
+    path.join(packageDirectory, "package.json"),
+    COMPUTER_USE_SHIM_PACKAGE_JSON,
+  );
+  return { nodeModulesRoot, entryPath };
+});
 
 function listenNamedPipe(
   server: NodeNet.Server,
@@ -414,7 +487,9 @@ function listenNamedPipe(
   return Effect.callback<void, CodexComputerUseBridgeError>((resume) => {
     const onError = (cause: Error) => {
       server.off("listening", onListening);
-      resume(Effect.fail(new CodexComputerUseBridgeError({ cause })));
+      resume(
+        Effect.fail(new CodexComputerUseBridgeError({ operation: "listen", pipePath, cause })),
+      );
     };
     const onListening = () => {
       server.off("error", onError);
@@ -430,16 +505,23 @@ function listenNamedPipe(
   });
 }
 
-function closeNamedPipe(server: NodeNet.Server, sockets: Set<NodeNet.Socket>): Effect.Effect<void> {
-  return Effect.callback<void>((resume) => {
-    for (const socket of sockets) socket.destroy();
-    if (!server.listening) {
-      resume(Effect.void);
-      return;
+const shutdownNamedPipe = Effect.fn("shutdownNamedPipe")(function* (
+  server: NodeNet.Server,
+  sockets: Set<NodeNet.Socket>,
+  connectionScope: Scope.Scope,
+) {
+  const serverClosed = yield* Deferred.make<void>();
+  yield* Effect.sync(() => {
+    try {
+      server.close(() => Deferred.doneUnsafe(serverClosed, Effect.void));
+    } catch {
+      Deferred.doneUnsafe(serverClosed, Effect.void);
     }
-    server.close(() => resume(Effect.void));
+    for (const socket of sockets) socket.destroy();
   });
-}
+  yield* Scope.close(connectionScope, Exit.void);
+  yield* Deferred.await(serverClosed);
+});
 
 export const makeCodexComputerUseBridge = Effect.fn("makeCodexComputerUseBridge")(function* (
   input: CodexComputerUseBridgeInput,
@@ -450,24 +532,27 @@ export const makeCodexComputerUseBridge = Effect.fn("makeCodexComputerUseBridge"
   const shim = yield* materializeComputerUseShim(input.codexHome);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const hostPlatform = yield* HostProcessPlatform;
-  const runConnection = yield* FiberSet.makeRuntime<never, void, never>();
   const pipeId = NodeCrypto.randomUUID();
   const pipePath =
     hostPlatform === "win32"
       ? `\\\\.\\pipe\\t3code-cua-${pipeId}`
       : `${NodeOS.tmpdir().replace(/[\\/]+$/, "")}/t3code-cua-${pipeId}.sock`;
   const sockets = new Set<NodeNet.Socket>();
+  const connectionScope = yield* Effect.acquireRelease(Scope.make("sequential"), (scope) =>
+    Scope.close(scope, Exit.void),
+  );
+  const runConnection = yield* FiberSet.makeRuntime<never, void, never>().pipe(
+    Effect.provideService(Scope.Scope, connectionScope),
+  );
 
   const handleConnection = Effect.fn("CodexComputerUseBridge.handleConnection")(function* (
     socket: NodeNet.Socket,
   ) {
-    yield* Effect.acquireRelease(
-      Effect.sync(() => sockets.add(socket)),
-      () =>
-        Effect.sync(() => {
-          sockets.delete(socket);
-          if (!socket.destroyed) socket.destroy();
-        }),
+    yield* Effect.acquireRelease(Effect.void, () =>
+      Effect.sync(() => {
+        sockets.delete(socket);
+        if (!socket.destroyed) socket.destroy();
+      }),
     );
 
     const helper = yield* spawner.spawn(
@@ -481,12 +566,12 @@ export const makeCodexComputerUseBridge = Effect.fn("makeCodexComputerUseBridge"
     const socketInput = NodeStream.fromReadable<Uint8Array, CodexComputerUseBridgeError>({
       evaluate: () => socket,
       closeOnDone: false,
-      onError: (cause) => new CodexComputerUseBridgeError({ cause }),
+      onError: (cause) => new CodexComputerUseBridgeError({ operation: "read", pipePath, cause }),
     });
     const socketOutput = NodeSink.fromWritable<CodexComputerUseBridgeError>({
       evaluate: () => socket,
       endOnDone: false,
-      onError: (cause) => new CodexComputerUseBridgeError({ cause }),
+      onError: (cause) => new CodexComputerUseBridgeError({ operation: "write", pipePath, cause }),
     });
 
     yield* Effect.raceFirst(
@@ -499,6 +584,7 @@ export const makeCodexComputerUseBridge = Effect.fn("makeCodexComputerUseBridge"
   });
 
   const server = NodeNet.createServer((socket) => {
+    sockets.add(socket);
     runConnection(
       handleConnection(socket).pipe(
         Effect.scoped,
@@ -508,9 +594,10 @@ export const makeCodexComputerUseBridge = Effect.fn("makeCodexComputerUseBridge"
       ),
     );
   });
-  yield* Effect.acquireRelease(listenNamedPipe(server, pipePath), () =>
-    closeNamedPipe(server, sockets),
+  yield* Effect.acquireRelease(Effect.succeed(server), () =>
+    shutdownNamedPipe(server, sockets, connectionScope),
   );
+  yield* listenNamedPipe(server, pipePath);
 
   return {
     nodeModulesRoot: shim.nodeModulesRoot,

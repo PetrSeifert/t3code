@@ -25,7 +25,9 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -1184,13 +1186,19 @@ export const makeCodexSessionRuntime = (
 ): Effect.Effect<
   CodexSessionRuntimeShape,
   CodexErrors.CodexAppServerError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | Scope.Scope
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
+  | FileSystem.FileSystem
+  | Path.Path
+  | Scope.Scope
 > =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const hostPlatform = yield* HostProcessPlatform;
     const runtimeScope = yield* Scope.Scope;
     const crypto = yield* Crypto.Crypto;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const events = yield* Queue.unbounded<ProviderEvent>();
     const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
@@ -2135,6 +2143,8 @@ export const makeCodexSessionRuntime = (
           ? yield* makeCodexComputerUseBridge({ codexHome, nodeModuleRoots }).pipe(
               Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               Effect.provideService(HostProcessPlatform, hostPlatform),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
               Effect.provideService(Scope.Scope, runtimeScope),
               Effect.catch((cause) =>
                 Effect.logWarning("Failed to start the Windows Computer Use bridge.", {
