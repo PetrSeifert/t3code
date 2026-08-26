@@ -358,10 +358,19 @@ function splitNullSeparatedPaths(input: string, truncated: boolean): string[] {
   return parts.filter((value) => value.length > 0);
 }
 
-function parseCheckpointStatusPaths(output: string): string[] {
-  return splitNullSeparatedPaths(output, false).flatMap((entry) =>
-    entry.length > 3 && entry[2] === " " ? [entry.slice(3)] : [],
-  );
+function parseCheckpointStatusPathspec(output: Uint8Array): Uint8Array {
+  const paths: Uint8Array[] = [];
+  let recordStart = 0;
+  for (let index = 0; index < output.byteLength; index += 1) {
+    if (output[index] !== 0) {
+      continue;
+    }
+    if (index - recordStart > 3 && output[recordStart + 2] === 0x20) {
+      paths.push(output.subarray(recordStart + 3, index + 1));
+    }
+    recordStart = index + 1;
+  }
+  return Buffer.concat(paths);
 }
 
 function chunkPathsForGitCheckIgnore(relativePaths: ReadonlyArray<string>): string[][] {
@@ -432,7 +441,8 @@ const gitCommand = (
   cwd: string,
   args: ReadonlyArray<string>,
   options?: {
-    readonly stdin?: string;
+    readonly stdin?: string | Uint8Array;
+    readonly captureStdoutBytes?: boolean;
     readonly env?: NodeJS.ProcessEnv;
     readonly allowNonZeroExit?: boolean;
     readonly timeoutMs?: number;
@@ -447,6 +457,9 @@ const gitCommand = (
     cwd,
     spawnCwd: globalThis.process.cwd(),
     ...(options?.stdin !== undefined ? { stdin: options.stdin } : {}),
+    ...(options?.captureStdoutBytes !== undefined
+      ? { captureStdoutBytes: options.captureStdoutBytes }
+      : {}),
     ...(options?.env !== undefined ? { env: options.env } : {}),
     ...(options?.allowNonZeroExit !== undefined
       ? { allowNonZeroExit: options.allowNonZeroExit }
@@ -487,6 +500,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
   const execute: VcsDriver.VcsDriver["Service"]["execute"] = (input) =>
     gitCommand(vcsProcess, input.operation, input.cwd, input.args, {
       ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+      ...(input.captureStdoutBytes !== undefined
+        ? { captureStdoutBytes: input.captureStdoutBytes }
+        : {}),
       ...(input.env !== undefined ? { env: input.env } : {}),
       ...(input.allowNonZeroExit !== undefined ? { allowNonZeroExit: input.allowNonZeroExit } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
@@ -714,12 +730,14 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
       return path.isAbsolute(gitCommonDir) ? gitCommonDir : path.resolve(cwd, gitCommonDir);
     });
 
-  const resolveRepositoryRoot = (cwd: string) =>
-    execute({
+  const resolveRepositoryRoot = Effect.fn("resolveRepositoryRoot")(function* (cwd: string) {
+    const result = yield* execute({
       operation: "GitVcsDriver.checkpoints.resolveRepositoryRoot",
       cwd,
       args: ["rev-parse", "--show-toplevel"],
-    }).pipe(Effect.map((result) => result.stdout.trim()));
+    });
+    return result.stdout.trim();
+  });
 
   const checkpoints: VcsDriver.VcsCheckpointOps = {
     captureCheckpoint: Effect.fn("GitVcsDriver.checkpoints.captureCheckpoint")(function* (input) {
@@ -769,9 +787,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             GIT_OPTIONAL_LOCKS: "0",
           },
           maxOutputBytes: WORKSPACE_FILES_MAX_OUTPUT_BYTES,
+          captureStdoutBytes: true,
         });
 
-        if (statusResult.stdoutTruncated) {
+        if (statusResult.stdoutTruncated || statusResult.stdoutBytes === undefined) {
           yield* execute({
             operation,
             cwd: input.cwd,
@@ -779,8 +798,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             env: commitEnv,
           });
         } else {
-          const changedPaths = parseCheckpointStatusPaths(statusResult.stdout);
-          if (changedPaths.length > 0) {
+          const changedPathspec = parseCheckpointStatusPathspec(statusResult.stdoutBytes);
+          if (changedPathspec.byteLength > 0) {
             yield* execute({
               operation,
               cwd: repositoryRoot,
@@ -791,7 +810,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                 "--pathspec-from-file=-",
                 "--pathspec-file-nul",
               ],
-              stdin: `${changedPaths.join("\0")}\0`,
+              stdin: changedPathspec,
               env: commitEnv,
             });
           }
