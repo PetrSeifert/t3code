@@ -131,7 +131,7 @@ const handleLine = (line) => {
 
 const getConnection = async () => {
   if (!connectionPromise) {
-    connectionPromise = nodeRepl.nativePipe
+    const candidate = nodeRepl.nativePipe
       .createConnection(pipePath)
       .then((connection) => {
         connection.on("data", (chunk) => {
@@ -145,6 +145,7 @@ const getConnection = async () => {
           }
         });
         const rejectAll = (reason) => {
+          if (connectionPromise !== candidate) return;
           const message = sanitizeError(reason || "Computer Use pipe closed");
           connectionPromise = undefined;
           receiveBuffer = "";
@@ -159,9 +160,10 @@ const getConnection = async () => {
         return connection;
       })
       .catch((error) => {
-        connectionPromise = undefined;
+        if (connectionPromise === candidate) connectionPromise = undefined;
         throw error;
       });
+    connectionPromise = candidate;
   }
   return connectionPromise;
 };
@@ -544,6 +546,7 @@ export const makeCodexComputerUseBridge = Effect.fn("makeCodexComputerUseBridge"
   const runConnection = yield* FiberSet.makeRuntime<never, void, never>().pipe(
     Effect.provideService(Scope.Scope, connectionScope),
   );
+  const runBridgeTask = yield* FiberSet.makeRuntime<never, void, never>();
 
   const handleConnection = Effect.fn("CodexComputerUseBridge.handleConnection")(function* (
     socket: NodeNet.Socket,
@@ -594,8 +597,18 @@ export const makeCodexComputerUseBridge = Effect.fn("makeCodexComputerUseBridge"
       ),
     );
   });
-  yield* Effect.acquireRelease(Effect.succeed(server), () =>
-    shutdownNamedPipe(server, sockets, connectionScope),
+  const shutdown = yield* Effect.cached(shutdownNamedPipe(server, sockets, connectionScope));
+  yield* Effect.acquireRelease(Effect.succeed(server), () => shutdown);
+  const onServerError = (cause: Error) => {
+    runBridgeTask(
+      Effect.logWarning("Windows Computer Use bridge server failed.", { cause }).pipe(
+        Effect.andThen(shutdown),
+      ),
+    );
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => server.on("error", onServerError)),
+    () => Effect.sync(() => server.off("error", onServerError)),
   );
   yield* listenNamedPipe(server, pipePath);
 

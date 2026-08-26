@@ -52,6 +52,7 @@ interface ExecutableShimOptions {
   readonly approvalPersistence?: "session" | "always";
   readonly failedConnectionAttempts?: number;
   readonly dropFirstRequestWithPartialResponse?: boolean;
+  readonly closePreviousConnectionOnSecondRequest?: boolean;
 }
 
 async function withExecutableShim(
@@ -61,55 +62,69 @@ async function withExecutableShim(
     readonly requests: ReadonlyArray<ShimPipeRequest>;
     readonly elicitations: ReadonlyArray<ShimElicitation>;
     readonly connectionAttempts: () => number;
+    readonly closeConnection: (index: number) => void;
   }) => Promise<void>,
 ): Promise<void> {
   const previousNodeRepl = Object.getOwnPropertyDescriptor(globalThis, "nodeRepl");
   const previousPipePath = process.env.T3_CODEX_COMPUTER_USE_PIPE_PATH;
   const requests: ShimPipeRequest[] = [];
   const elicitations: ShimElicitation[] = [];
-  let onData: ((chunk: Uint8Array) => void) | undefined;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   let connectionAttempts = 0;
-  let onClose: (() => void) | undefined;
-  const connection = {
-    on(event: string, listener: (value: Uint8Array) => void) {
-      if (event === "data") onData = listener;
-      if (event === "close") onClose = listener as () => void;
-      return connection;
-    },
-    write(chunk: Uint8Array) {
-      const request = JSON.parse(decoder.decode(chunk)) as ShimPipeRequest;
-      requests.push(request);
-      if (options.dropFirstRequestWithPartialResponse === true && requests.length === 1) {
-        queueMicrotask(() => {
-          onData?.(encoder.encode('{"id":'));
-          onClose?.();
-        });
+  const connections: Array<{ readonly close: () => void }> = [];
+  const makeConnection = () => {
+    const connectionIndex = connections.length;
+    let onData: ((chunk: Uint8Array) => void) | undefined;
+    let onClose: (() => void) | undefined;
+    const connection = {
+      on(event: string, listener: (value: Uint8Array) => void) {
+        if (event === "data") onData = listener;
+        if (event === "close") onClose = listener as () => void;
+        return connection;
+      },
+      write(chunk: Uint8Array) {
+        const request = JSON.parse(decoder.decode(chunk)) as ShimPipeRequest;
+        requests.push(request);
+        if (
+          options.closePreviousConnectionOnSecondRequest === true &&
+          connectionIndex === 1 &&
+          requests.length === 2
+        ) {
+          connections[0]?.close();
+        }
+        if (options.dropFirstRequestWithPartialResponse === true && requests.length === 1) {
+          queueMicrotask(() => {
+            onData?.(encoder.encode('{"id":'));
+            onClose?.();
+          });
+          return true;
+        }
+        const approved = request.meta["x-oai-cua-approved-app"] === "t3code.exe";
+        const response =
+          options.requireApproval && !approved
+            ? {
+                id: request.id,
+                ok: false,
+                approvalRequest: {
+                  app: "t3code.exe",
+                  displayName: "T3 Code",
+                  riskLevel: "low",
+                },
+              }
+            : {
+                id: request.id,
+                ok: true,
+                result: options.requireApproval
+                  ? { screenshots: [], text: "approved" }
+                  : [{ name: "T3 Code" }],
+              };
+        queueMicrotask(() => onData?.(encoder.encode(`${JSON.stringify(response)}\n`)));
         return true;
-      }
-      const approved = request.meta["x-oai-cua-approved-app"] === "t3code.exe";
-      const response =
-        options.requireApproval && !approved
-          ? {
-              id: request.id,
-              ok: false,
-              approvalRequest: {
-                app: "t3code.exe",
-                displayName: "T3 Code",
-                riskLevel: "low",
-              },
-            }
-          : {
-              id: request.id,
-              ok: true,
-              result: options.requireApproval
-                ? { screenshots: [], text: "approved" }
-                : [{ name: "T3 Code" }],
-            };
-      queueMicrotask(() => onData?.(encoder.encode(`${JSON.stringify(response)}\n`)));
-      return true;
-    },
+      },
+    };
+    connections.push({ close: () => onClose?.() });
+    return connection;
   };
 
   Object.defineProperty(globalThis, "nodeRepl", {
@@ -122,7 +137,7 @@ async function withExecutableShim(
           if (connectionAttempts <= (options.failedConnectionAttempts ?? 0)) {
             throw new Error("Computer Use pipe is not ready");
           }
-          return connection;
+          return makeConnection();
         },
       },
       createElicitation: async (request: ShimElicitation) => {
@@ -145,6 +160,7 @@ async function withExecutableShim(
       requests,
       elicitations,
       connectionAttempts: () => connectionAttempts,
+      closeConnection: (index) => connections[index]?.close(),
     });
   } finally {
     if (previousNodeRepl) {
@@ -320,6 +336,17 @@ describe("CodexComputerUseBridge", () => {
         NodeAssert.deepStrictEqual(await sky.list_apps(), [{ name: "T3 Code" }]);
         NodeAssert.equal(connectionAttempts(), 2);
         NodeAssert.equal(requests.length, 2);
+      },
+    ));
+
+  it("ignores a stale close event after reconnecting", () =>
+    withExecutableShim(
+      { requireApproval: false, closePreviousConnectionOnSecondRequest: true },
+      async ({ sky, connectionAttempts, closeConnection }) => {
+        NodeAssert.deepStrictEqual(await sky.list_apps(), [{ name: "T3 Code" }]);
+        closeConnection(0);
+        NodeAssert.deepStrictEqual(await sky.list_apps(), [{ name: "T3 Code" }]);
+        NodeAssert.equal(connectionAttempts(), 2);
       },
     ));
 
