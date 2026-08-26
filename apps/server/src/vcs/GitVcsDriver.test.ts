@@ -112,6 +112,19 @@ it.effect("GitVcsDriver forwards execute env to the VCS process", () => {
 it.effect("GitVcsDriver stages only changed paths when capturing a checkpoint", () => {
   const commands: Array<VcsProcess.VcsProcessInput> = [];
   const changedPaths = ["changed.ts", "deleted.ts", "dir/new\nfile.ts", ":literal.ts"];
+  const invalidUtf8Path = new Uint8Array([0xff, ...new TextEncoder().encode(".txt")]);
+  const statusBytes = Buffer.concat([
+    Buffer.from(
+      ` M ${changedPaths[0]}\0 D ${changedPaths[1]}\0?? ${changedPaths[2]}\0?? ${changedPaths[3]}\0?? `,
+    ),
+    invalidUtf8Path,
+    Buffer.from([0]),
+  ]);
+  const expectedPathspec = Buffer.concat([
+    Buffer.from(`${changedPaths.join("\0")}\0`),
+    invalidUtf8Path,
+    Buffer.from([0]),
+  ]);
 
   return Effect.gen(function* () {
     const driver = yield* GitVcsDriver.makeVcsDriverShape();
@@ -134,6 +147,7 @@ it.effect("GitVcsDriver stages only changed paths when capturing a checkpoint", 
       ".",
     ]);
     assert.strictEqual(statusCommand.env?.GIT_OPTIONAL_LOCKS, "0");
+    assert.strictEqual(statusCommand.captureStdoutBytes, true);
 
     const addCommand = commands.find((command) => command.args[3] === "add");
     assert.isDefined(addCommand);
@@ -144,7 +158,8 @@ it.effect("GitVcsDriver stages only changed paths when capturing a checkpoint", 
       "--pathspec-from-file=-",
       "--pathspec-file-nul",
     ]);
-    assert.strictEqual(addCommand.stdin, `${changedPaths.join("\0")}\0`);
+    assert.instanceOf(addCommand.stdin, Uint8Array);
+    assert.deepStrictEqual(addCommand.stdin, expectedPathspec);
   }).pipe(
     Effect.provide(
       Layer.mergeAll(
@@ -156,7 +171,7 @@ it.effect("GitVcsDriver stages only changed paths when capturing a checkpoint", 
               const args = input.args.slice(2);
               const stdout =
                 args[0] === "status"
-                  ? ` M ${changedPaths[0]}\0 D ${changedPaths[1]}\0?? ${changedPaths[2]}\0?? ${changedPaths[3]}\0`
+                  ? new TextDecoder().decode(statusBytes)
                   : args[0] === "rev-parse" && args[1] === "--git-common-dir"
                     ? ".git\n"
                     : args[0] === "rev-parse" && args[1] === "--show-toplevel"
@@ -172,6 +187,7 @@ it.effect("GitVcsDriver stages only changed paths when capturing a checkpoint", 
                 stderr: "",
                 stdoutTruncated: false,
                 stderrTruncated: false,
+                ...(args[0] === "status" ? { stdoutBytes: statusBytes } : {}),
               };
             }),
         }),
