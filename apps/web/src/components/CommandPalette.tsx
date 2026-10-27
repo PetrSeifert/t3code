@@ -809,14 +809,15 @@ function OpenCommandPaletteDialog(props: {
   })();
 
   const newOrchestratorItems = (() => {
-    const liveOrchestratorKeys = new Set(
-      resolveSidebarOrchestrators(pickerProjects, threads).map((entry) => entry.key),
-    );
     const ordered = orderNewOrchestratorProjects(
       pickerProjects.filter(
         (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
       ),
-      liveOrchestratorKeys,
+      resolveSidebarOrchestrators(projects, threads),
+      (project) =>
+        projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)?.memberProjects ?? [
+          project,
+        ],
     );
     return buildNewThreadInProjectItems({
       projects: ordered.map(({ project }) => project),

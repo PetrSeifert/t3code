@@ -78,7 +78,7 @@ export function resolveSidebarOrchestrators<
   }));
 }
 
-export function resolveSidebarOrchestratorStatus(
+function resolveSidebarOrchestratorStatus(
   thread: OrchestratorThread,
   runningWorkerCount: number,
 ): SidebarOrchestratorStatus {
@@ -100,16 +100,23 @@ export function sidebarOrchestratorStatusLabel(status: SidebarOrchestratorStatus
   }
 }
 
-/** Projects that can take a new orchestrator first, in their order; the rest after, disabled. */
+/**
+ * Picker projects that can take a new orchestrator first, in their order; the rest after.
+ * A grouped picker project stands for all its members, so any member's orchestrator counts.
+ */
 export function orderNewOrchestratorProjects<P extends OrchestratorProject>(
   projects: ReadonlyArray<P>,
-  liveOrchestratorKeys: ReadonlySet<string>,
+  orchestrators: ReadonlyArray<{ readonly project: OrchestratorProject }>,
+  membersOf: (project: P) => ReadonlyArray<OrchestratorProject>,
 ): { readonly project: P; readonly hasOrchestrator: boolean }[] {
+  const orchestratedProjectKeys = new Set(
+    orchestrators.map(({ project }) => `${project.environmentId}:${project.id}`),
+  );
   const entries = projects.map((project) => ({
     project,
-    hasOrchestrator:
-      project.orchestratorThreadId != null &&
-      liveOrchestratorKeys.has(threadKey(project.environmentId, project.orchestratorThreadId)),
+    hasOrchestrator: membersOf(project).some((member) =>
+      orchestratedProjectKeys.has(`${member.environmentId}:${member.id}`),
+    ),
   }));
   return [
     ...entries.filter((entry) => !entry.hasOrchestrator),

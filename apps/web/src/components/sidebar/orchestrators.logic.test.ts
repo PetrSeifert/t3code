@@ -146,9 +146,10 @@ describe("orderNewOrchestratorProjects", () => {
       makeProject("project-c", "stale"),
       makeProject("project-d", null),
     ];
+    const orchestrators = resolveSidebarOrchestrators(projects, [makeThread("orch-a")]);
 
     expect(
-      orderNewOrchestratorProjects(projects, new Set(["env-a:orch-a"])).map((entry) => [
+      orderNewOrchestratorProjects(projects, orchestrators, (project) => [project]).map((entry) => [
         entry.project.id,
         entry.hasOrchestrator,
       ]),
@@ -158,5 +159,20 @@ describe("orderNewOrchestratorProjects", () => {
       ["project-d", false],
       ["project-a", true],
     ]);
+  });
+
+  it("disables a grouped project when another member has the orchestrator", () => {
+    const member = makeProject("project-b", "orch-b", "env-b");
+    const target = makeProject("project-a", null);
+    const orchestrators = resolveSidebarOrchestrators(
+      [member],
+      [makeThread("orch-b", { projectId: "project-b", environmentId: "env-b" })],
+    );
+
+    expect(
+      orderNewOrchestratorProjects([target], orchestrators, () => [target, member]).map(
+        (entry) => entry.hasOrchestrator,
+      ),
+    ).toEqual([true]);
   });
 });
