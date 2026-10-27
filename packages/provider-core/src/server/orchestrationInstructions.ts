@@ -34,6 +34,19 @@ export const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
 When browser work was asked, \`preview_*\` is the browser you share with the user: \`preview_status\` first, then \`preview_open\` if no tab can be automated. Prefer snapshot locators over coordinates. Switch browsers only if the tools are absent or \`preview_open\` says unsupported, the user asks, or two preview calls fail on one step. Then quote the error and switch.
 `;
 
+/** The role section for a project's orchestrator thread. */
+export function buildOrchestratorRoleSection(input: {
+  readonly projectTitle: string;
+  readonly threadId: string;
+  readonly instructions: string;
+}): string {
+  return [
+    "## Orchestrator thread",
+    `This thread is the orchestrator for ${input.projectTitle}. Its id is ${input.threadId}.`,
+    ...(input.instructions === "" ? [] : [input.instructions]),
+  ].join("\n");
+}
+
 // ACP only: some ACP agents accept the injected MCP server but never expose
 // its tools, so they need the terminal transport other harnesses never use.
 const T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS = `ACP fallback: if the T3 tools are absent and \`T3_ACP_MCP_NODE\` is present, call them through the terminal: \`ELECTRON_RUN_AS_NODE=1 "$T3_ACP_MCP_NODE" \${T3_ACP_MCP_ENTRYPOINT:+"$T3_ACP_MCP_ENTRYPOINT"} acp-mcp-call orchestrator_capabilities '{}'\` (\`T3_ACP_MCP_ENTRYPOINT\` is unset for a standalone executable). Delegate with \`acp-mcp-call delegate_task '{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\`.`;
@@ -49,9 +62,10 @@ Investigate with read-only actions and do not edit files or otherwise execute th
 export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
+  readonly orchestratorRole?: string | undefined;
 }
 
-/** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
+/** ACP lacks system/developer fields; inject context on first prompt and tool/mode/role changes. */
 export function t3AcpPromptWithInstructions(input: {
   readonly prompt: string;
   readonly state: T3AcpInstructionState;
@@ -61,7 +75,8 @@ export function t3AcpPromptWithInstructions(input: {
   if (input.prompt.trimStart().startsWith("/")) return input.prompt;
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
-    input.previousState.hasT3Mcp === input.state.hasT3Mcp
+    input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
+    input.previousState.orchestratorRole === input.state.orchestratorRole
   ) {
     return input.prompt;
   }
@@ -76,24 +91,31 @@ export function t3AcpPromptWithInstructions(input: {
           T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
         ]
       : []),
+    ...(input.state.orchestratorRole === undefined ? [] : [input.state.orchestratorRole]),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
-}
-
-function prependT3OrchestrationInstructions(prompt: string): string {
-  return `<t3_code_orchestration_instructions>${T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${prompt}\n</user_request>`;
 }
 
 export function t3OrchestrationPromptForFirstRun(input: {
   readonly prompt: string;
   readonly runOrdinal: number;
   readonly hasT3Mcp: boolean;
+  readonly orchestratorRole?: string | undefined;
 }): string {
-  return input.runOrdinal === 1 && input.hasT3Mcp
-    ? prependT3OrchestrationInstructions(input.prompt)
-    : input.prompt;
+  if (input.runOrdinal !== 1) return input.prompt;
+  const instructions = t3OrchestrationSystemPrompt(input.hasT3Mcp, input.orchestratorRole);
+  return instructions === undefined
+    ? input.prompt
+    : `<t3_code_orchestration_instructions>${instructions.trim()}</t3_code_orchestration_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
 
-export function t3OrchestrationSystemPrompt(hasT3Mcp: boolean): string | undefined {
-  return hasT3Mcp ? T3_CODE_ORCHESTRATION_INSTRUCTIONS : undefined;
+export function t3OrchestrationSystemPrompt(
+  hasT3Mcp: boolean,
+  orchestratorRole?: string,
+): string | undefined {
+  const sections = [
+    ...(hasT3Mcp ? [T3_CODE_ORCHESTRATION_INSTRUCTIONS.trim()] : []),
+    ...(orchestratorRole === undefined ? [] : [orchestratorRole]),
+  ];
+  return sections.length === 0 ? undefined : `\n\n${sections.join("\n\n")}\n`;
 }

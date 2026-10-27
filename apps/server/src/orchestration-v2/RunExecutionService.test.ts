@@ -16,6 +16,7 @@ import {
   type OrchestrationV2RunAttempt,
   type OrchestrationV2Subagent,
   type OrchestrationV2TurnItem,
+  ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
@@ -44,6 +45,8 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectStore from "./ProjectStore.ts";
+import type { ProjectRow } from "./ProjectStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
 import * as McpAppModelContext from "../mcpApps/McpAppModelContext.ts";
 import * as PreviewAgentActivity from "../preview/PreviewAgentActivity.ts";
@@ -62,6 +65,10 @@ const layerTurnItemPositionsTest = Layer.mock(TurnItemPositionStore.TurnItemPosi
   allocate: () => Effect.succeed(1),
 });
 
+const layerProjectsEmpty = Layer.mock(ProjectStore.ProjectStoreV2)({
+  get: () => Effect.succeedNone,
+});
+
 const layerRunExecutionTest = RunExecutionService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -71,6 +78,7 @@ const layerRunExecutionTest = RunExecutionService.layer.pipe(
       layerTurnItemPositionsTest,
       Layer.mock(EventSink.EventSinkV2)({}),
       IdAllocator.layer,
+      layerProjectsEmpty,
       Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
         ingestNormalized: () => Effect.succeed([]),
       }),
@@ -898,6 +906,7 @@ it.effect("passes the thread's MCP app context to the provider under a safe key"
             layerTurnItemPositionsTest,
             Layer.mock(EventSink.EventSinkV2)({}),
             IdAllocator.layer,
+            layerProjectsEmpty,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
@@ -907,6 +916,129 @@ it.effect("passes the thread's MCP app context to the provider under a safe key"
       ),
     ),
   ),
+);
+
+const orchestratorProjectId = ProjectId.make("project:orchestrator");
+const orchestratorThreadId = ThreadId.make("thread:orchestrator");
+
+const orchestratorRoleForTurn = (
+  appThread: OrchestrationV2AppThread,
+  projectOrchestratorThreadId: ThreadId | null,
+) =>
+  Effect.gen(function* () {
+    const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
+    const started = yield* Deferred.make<ProviderAdapter.ProviderAdapterV2TurnInput>();
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const attemptId = RunAttemptId.make(`attempt:${appThread.id}`);
+    yield* runExecution.startRootRun({
+      commandId: CommandId.make(`command:${appThread.id}`),
+      appThread,
+      providerSessionId: ProviderSessionId.make(`session:${appThread.id}`),
+      session: {
+        events: Stream.never,
+        startTurn: (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
+          Deferred.succeed(started, input),
+      } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
+      run: {
+        id: RunId.make(`run:${appThread.id}`),
+        threadId: appThread.id,
+        ordinal: 1,
+        providerInstanceId,
+      } as OrchestrationV2Run,
+      rootNode: { id: NodeId.make(`node:${appThread.id}`) } as OrchestrationV2ExecutionNode,
+      checkpointScope: {
+        id: CheckpointScopeId.make(`checkpoint-scope:${appThread.id}`),
+      } as OrchestrationV2CheckpointScope,
+      providerThread: {
+        id: ProviderThreadId.make(`provider-thread:${appThread.id}`),
+        driver,
+      } as OrchestrationV2ProviderThread,
+      attempt: { id: attemptId, providerTurnId: null } as OrchestrationV2RunAttempt,
+      attemptId,
+      providerTurnOrdinal: 1,
+      message: {
+        messageId: MessageId.make(`message:${appThread.id}`),
+        text: "Hello",
+        attachments: [],
+        createdBy: "user",
+        creationSource: "web",
+      },
+      modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+      runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: process.cwd() },
+    });
+    return (yield* Deferred.await(started)).orchestratorRole;
+  }).pipe(
+    Effect.provide(
+      RunExecutionService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            McpAppModelContext.layerEmpty,
+            PreviewAgentActivity.layer,
+            Layer.mock(CheckpointService.CheckpointServiceV2)({
+              captureBaseline: () => Effect.void,
+            }),
+            layerTurnItemPositionsTest,
+            Layer.mock(EventSink.EventSinkV2)({}),
+            IdAllocator.layer,
+            Layer.mock(ProjectStore.ProjectStoreV2)({
+              get: (projectId) =>
+                Effect.succeed(
+                  projectId === orchestratorProjectId
+                    ? Option.some({
+                        projectId,
+                        title: "Rocket",
+                        orchestratorThreadId: projectOrchestratorThreadId,
+                      } as ProjectRow)
+                    : Option.none(),
+                ),
+            }),
+            Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
+              ingestNormalized: () => Effect.succeed([]),
+            }),
+            ServerSettings.layerTest({ orchestratorInstructions: "Run the pr-orchestrate skill." }),
+          ),
+        ),
+      ),
+    ),
+  );
+
+const projectThread = (id: ThreadId, archivedAt: DateTime.Utc | null = null) =>
+  ({
+    ...rootAppThread(id),
+    projectId: orchestratorProjectId,
+    archivedAt,
+  }) as OrchestrationV2AppThread;
+
+it.effect("gives only the project's live orchestrator thread its role", () =>
+  Effect.gen(function* () {
+    assert.equal(
+      yield* orchestratorRoleForTurn(projectThread(orchestratorThreadId), orchestratorThreadId),
+      [
+        "## Orchestrator thread",
+        "This thread is the orchestrator for Rocket. Its id is thread:orchestrator.",
+        "Run the pr-orchestrate skill.",
+      ].join("\n"),
+    );
+    assert.isUndefined(
+      yield* orchestratorRoleForTurn(
+        projectThread(ThreadId.make("thread:worker")),
+        orchestratorThreadId,
+      ),
+    );
+    assert.isUndefined(
+      yield* orchestratorRoleForTurn(
+        projectThread(orchestratorThreadId, DateTime.makeUnsafe(0)),
+        orchestratorThreadId,
+      ),
+    );
+    assert.isUndefined(yield* orchestratorRoleForTurn(projectThread(orchestratorThreadId), null));
+    assert.isUndefined(
+      yield* orchestratorRoleForTurn(
+        { ...projectThread(orchestratorThreadId), projectId: ProjectId.make("project:other") },
+        orchestratorThreadId,
+      ),
+    );
+  }),
 );
 
 it.effect("fails the run when its ownership check cannot be read before calling the provider", () =>
@@ -932,6 +1064,7 @@ it.effect("fails the run when its ownership check cannot be read before calling 
               ),
           }),
           IdAllocator.layer,
+          layerProjectsEmpty,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -1144,6 +1277,7 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
               ]).pipe(Effect.as([])),
           }),
           IdAllocator.layer,
+          layerProjectsEmpty,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -1266,6 +1400,7 @@ it.effect.each(["failure", "interruption", "stale-attempt", "start-guard"] as co
                 }),
             }),
             IdAllocator.layer,
+            layerProjectsEmpty,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: () => Effect.succeed([]),
             }),
@@ -1435,6 +1570,7 @@ it.effect("ingests new member threads of an owned child after the root turn term
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
           IdAllocator.layer,
+          layerProjectsEmpty,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
@@ -1679,6 +1815,7 @@ it.effect("ends a nested native subagent and its thread when the root run is int
               ),
           }),
           IdAllocator.layer,
+          layerProjectsEmpty,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: () => Effect.succeed([]),
           }),
@@ -2023,6 +2160,7 @@ it.effect(
               writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
             }),
             IdAllocator.layer,
+            layerProjectsEmpty,
             Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
               ingestNormalized: (input) =>
                 Ref.update(ingested, (current) => [...current, input.event]).pipe(Effect.as([])),
@@ -3074,6 +3212,7 @@ function captureRootRunTermination(input: {
               }),
           }),
           IdAllocator.layer,
+          layerProjectsEmpty,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: input.ingestNormalized ?? (() => Effect.succeed([])),
           }),
@@ -3573,6 +3712,7 @@ function runBackgroundItemScenario(
             writeIfRunCurrent: () => Effect.succeed({ committed: true, storedEvents: [] }),
           }),
           IdAllocator.layer,
+          layerProjectsEmpty,
           Layer.mock(ProviderEventIngestor.ProviderEventIngestorV2)({
             ingestNormalized: (input) =>
               Effect.gen(function* () {
