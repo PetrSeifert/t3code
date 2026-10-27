@@ -55,6 +55,19 @@ export const T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH = deviceToolInstr
   ` Load them with ToolSearch \`select:${T3_CODE_DEVICE_TOOLS.map((tool) => `mcp__t3-code__${tool}`).join(",")}\`.`,
 );
 
+/** The role section for a project's orchestrator thread. */
+export function buildOrchestratorRoleSection(input: {
+  readonly projectTitle: string;
+  readonly threadId: string;
+  readonly instructions: string;
+}): string {
+  return [
+    "## Orchestrator thread",
+    `This thread is the orchestrator for ${input.projectTitle}. Its id is ${input.threadId}.`,
+    ...(input.instructions === "" ? [] : [input.instructions]),
+  ].join("\n");
+}
+
 // ACP only: some ACP agents accept the injected MCP server but never expose
 // its tools, so they need the terminal transport other harnesses never use.
 const T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS = `ACP fallback: if the T3 tools are absent and \`T3_ACP_MCP_NODE\` is present, call them through the terminal: \`ELECTRON_RUN_AS_NODE=1 "$T3_ACP_MCP_NODE" \${T3_ACP_MCP_ENTRYPOINT:+"$T3_ACP_MCP_ENTRYPOINT"} acp-mcp-call orchestrator_capabilities '{}'\` (\`T3_ACP_MCP_ENTRYPOINT\` is unset for a standalone executable). Delegate with \`acp-mcp-call delegate_task '{"task":"...","target":{"providerInstanceId":"...","model":"..."},"mode":"async","clientRequestId":"..."}'\`.`;
@@ -67,13 +80,19 @@ const T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Plan
 
 Investigate with read-only actions and do not edit files or otherwise execute the implementation. Resolve discoverable facts before asking questions. When the requirements are decision complete, return a concrete implementation plan and do not start implementing it. Treat this mode as active until T3 Code supplies a different interaction-mode instruction.`;
 
+// The earlier role stays in ACP history, so dropping it must be said out loud.
+const T3_CODE_ACP_ORCHESTRATOR_REVOKED_INSTRUCTIONS = `## Orchestrator thread
+
+This thread is no longer its project's orchestrator. Ignore the earlier orchestrator instructions.`;
+
 export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
   readonly hasDeviceTools: boolean;
+  readonly orchestratorRole?: string | undefined;
 }
 
-/** ACP lacks system/developer fields; inject context on first prompt and tool/mode changes. */
+/** ACP lacks system/developer fields; inject context on first prompt and tool/mode/role changes. */
 export function t3AcpPromptWithInstructions(input: {
   readonly prompt: string;
   readonly state: T3AcpInstructionState;
@@ -84,7 +103,8 @@ export function t3AcpPromptWithInstructions(input: {
   if (
     input.previousState?.interactionMode === input.state.interactionMode &&
     input.previousState.hasT3Mcp === input.state.hasT3Mcp &&
-    input.previousState.hasDeviceTools === input.state.hasDeviceTools
+    input.previousState.hasDeviceTools === input.state.hasDeviceTools &&
+    input.previousState.orchestratorRole === input.state.orchestratorRole
   ) {
     return input.prompt;
   }
@@ -100,6 +120,11 @@ export function t3AcpPromptWithInstructions(input: {
           T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
         ]
       : []),
+    ...(input.state.orchestratorRole !== undefined
+      ? [input.state.orchestratorRole]
+      : input.previousState?.orchestratorRole !== undefined
+        ? [T3_CODE_ACP_ORCHESTRATOR_REVOKED_INSTRUCTIONS]
+        : []),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
@@ -118,17 +143,21 @@ export function t3OrchestrationPrompt(input: {
   readonly prompt: string;
   readonly hasT3Mcp: boolean;
   readonly hasDeviceTools: boolean;
+  readonly orchestratorRole?: string | undefined;
   readonly orchestrationDelivered: boolean;
   readonly deviceInstructionsDelivered: boolean;
 }): string {
-  if (!input.hasT3Mcp) return input.prompt;
   if (!input.orchestrationDelivered) {
-    return prependT3OrchestrationInstructions(
-      input.prompt,
-      orchestrationInstructions(input.hasDeviceTools),
+    const instructions = t3OrchestrationSystemPrompt(
+      input.hasT3Mcp,
+      input.hasDeviceTools,
+      input.orchestratorRole,
     );
+    return instructions === undefined
+      ? input.prompt
+      : prependT3OrchestrationInstructions(input.prompt, instructions);
   }
-  return input.hasDeviceTools && !input.deviceInstructionsDelivered
+  return input.hasT3Mcp && input.hasDeviceTools && !input.deviceInstructionsDelivered
     ? prependT3OrchestrationInstructions(input.prompt, T3_CODE_DEVICE_TOOL_INSTRUCTIONS)
     : input.prompt;
 }
@@ -136,6 +165,9 @@ export function t3OrchestrationPrompt(input: {
 export function t3OrchestrationSystemPrompt(
   hasT3Mcp: boolean,
   hasDeviceTools: boolean,
+  orchestratorRole?: string,
 ): string | undefined {
-  return hasT3Mcp ? orchestrationInstructions(hasDeviceTools) : undefined;
+  const instructions = hasT3Mcp ? orchestrationInstructions(hasDeviceTools) : undefined;
+  if (orchestratorRole === undefined) return instructions;
+  return `${instructions?.trimEnd() ?? ""}\n\n${orchestratorRole}\n`;
 }

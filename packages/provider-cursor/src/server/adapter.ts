@@ -2303,6 +2303,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             }),
             hasT3Mcp: mcpServers !== undefined,
             hasDeviceTools,
+            orchestratorRole: turnInput.orchestratorRole,
             orchestrationDelivered: delivered.orchestration,
             deviceInstructionsDelivered: delivered.device,
           });
@@ -2407,7 +2408,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             const compacted = message === "/compress";
             yield* Ref.set(told, {
               agent: agent.nativeThreadId,
-              orchestration: !compacted && (delivered.orchestration || mcpServers !== undefined),
+              orchestration:
+                !compacted &&
+                (delivered.orchestration ||
+                  mcpServers !== undefined ||
+                  turnInput.orchestratorRole !== undefined),
               device: !compacted && hasDeviceTools,
             });
             const startedAt = yield* DateTime.now;

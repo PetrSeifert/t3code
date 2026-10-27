@@ -428,6 +428,8 @@ export interface ProviderAdapterV2TurnInput {
   readonly modelSelection: ModelSelection;
   readonly runtimePolicy: ProviderAdapterV2RuntimePolicy;
   readonly appContext?: ReadonlyArray<{ readonly key: string; readonly text: string }>;
+  /** Set only when this thread is its project's live orchestrator; see buildOrchestratorRoleSection. */
+  readonly orchestratorRole?: string;
 }
 
 export interface ProviderAdapterV2SteerInput {

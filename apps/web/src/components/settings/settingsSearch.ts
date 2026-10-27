@@ -665,6 +665,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["generated thread titles prompt custom style naming rename regenerate"],
   },
   {
+    id: "orchestrator-instructions",
+    title: "Orchestrator instructions",
+    to: "/settings/threads",
+    scope: "environment-defaults",
+    searchTerms: ["orchestrator thread project role skill delegate workers prompt"],
+  },
+  {
     id: "app-version",
     title: "Version",
     to: "/settings/about",

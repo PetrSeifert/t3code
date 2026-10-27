@@ -733,6 +733,7 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
     /** ChatGPT token sharing does not accept service tiers. */
     readonly omitServiceTier?: boolean;
     readonly appContext?: ProviderAdapter.ProviderAdapterV2TurnInput["appContext"];
+    readonly orchestratorRole?: string;
   }) {
     const runtimeModeDefaults = codexRuntimeModeTurnDefaults(input.runtimePolicy.runtimeMode);
     const approvalPolicy =
@@ -769,10 +770,14 @@ export const buildCodexTurnStartParams = Effect.fn("CodexAdapterV2.buildCodexTur
             },
           )
         : undefined;
-    const additionalContext =
-      t3Context === undefined && Object.keys(appContext).length === 0
+    const roleContext =
+      input.orchestratorRole === undefined
         ? undefined
-        : { ...t3Context, ...appContext };
+        : { t3_code_orchestrator: { kind: "application" as const, value: input.orchestratorRole } };
+    const additionalContext =
+      t3Context === undefined && roleContext === undefined && Object.keys(appContext).length === 0
+        ? undefined
+        : { ...t3Context, ...roleContext, ...appContext };
     return yield* decodeCodexTurnStartParamsWithCollaborationMode({
       threadId: input.nativeThreadId,
       input: input.codexInput,
@@ -6490,6 +6495,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               deviceToolsAvailable: mcpSession?.capabilities?.has("device") ?? false,
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
+              ...(turnInput.orchestratorRole === undefined
+                ? {}
+                : { orchestratorRole: turnInput.orchestratorRole }),
             });
             yield* Ref.update(pendingRootTurns, (current) => {
               const updated = new Map(current);

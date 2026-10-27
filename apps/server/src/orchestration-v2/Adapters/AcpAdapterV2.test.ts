@@ -959,9 +959,10 @@ describe("AcpAdapterV2", () => {
         ordinal: number,
         runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
         messageText: string,
+        orchestratorRole?: string,
       ) {
-        yield* runtime.startTurn(
-          makeTurnInput({
+        yield* runtime.startTurn({
+          ...makeTurnInput({
             threadId,
             providerThread,
             instanceId,
@@ -970,7 +971,8 @@ describe("AcpAdapterV2", () => {
             ordinal,
             messageText,
           }),
-        );
+          ...(orchestratorRole === undefined ? {} : { orchestratorRole }),
+        });
         yield* runtime.events.pipe(
           Stream.takeUntil((event) => event.type === "turn.terminal"),
           Stream.runDrain,
@@ -1031,6 +1033,16 @@ describe("AcpAdapterV2", () => {
         "session/set_config_option",
         "Build should restore the native mode that T3 temporarily replaced for Plan",
       );
+      assert.notInclude(restoredBuild.prompt, "## Orchestrator thread");
+
+      const role = "## Orchestrator thread";
+      const marked = yield* runTurn(7, defaultPolicy, "You orchestrate now.", role);
+      assert.include(marked.prompt, "<t3_code_instructions>");
+      assert.include(marked.prompt, role);
+      const stillMarked = yield* runTurn(8, defaultPolicy, "Keep going.", role);
+      assert.notInclude(stillMarked.prompt, "<t3_code_instructions>");
+      const unmarked = yield* runTurn(9, defaultPolicy, "Back to normal.");
+      assert.include(unmarked.prompt, "no longer its project's orchestrator");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

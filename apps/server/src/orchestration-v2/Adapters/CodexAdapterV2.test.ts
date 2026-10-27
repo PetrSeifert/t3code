@@ -246,6 +246,25 @@ describe("CodexAdapterV2 runtime policy", () => {
       assert.isDefined(withT3.additionalContext?.["t3_code_runtime"]);
     }),
   );
+
+  it.effect("sends the orchestrator role as its own Codex context entry every turn", () =>
+    Effect.gen(function* () {
+      const params = (orchestratorRole?: string) =>
+        CodexAdapterV2.buildCodexTurnStartParams({
+          nativeThreadId: "native-orchestrator",
+          codexInput: [{ type: "text", text: "status?" }],
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+          hasT3Mcp: true,
+          ...(orchestratorRole === undefined ? {} : { orchestratorRole }),
+        });
+      assert.deepEqual(
+        (yield* params("## Orchestrator thread")).additionalContext?.["t3_code_orchestrator"],
+        { kind: "application", value: "## Orchestrator thread" },
+      );
+      assert.isUndefined((yield* params()).additionalContext?.["t3_code_orchestrator"]);
+    }),
+  );
 });
 
 describe("CodexAdapterV2 native protocol logging", () => {
