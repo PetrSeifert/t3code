@@ -7,6 +7,7 @@ import {
   ProjectId,
   ProjectScript,
   ThreadEnvMode,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
@@ -36,6 +37,7 @@ export const ProjectRow = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
   autoPull: Schema.Boolean,
+  orchestratorThreadId: Schema.NullOr(ThreadId),
   faviconPath: Schema.NullOr(Schema.String),
   projectIcon: Schema.NullOr(StoredProjectIcon),
   scripts: Schema.Array(ProjectScript),
@@ -62,6 +64,7 @@ function toShell(row: ProjectRow): OrchestrationProjectShell {
     defaultModelSelection: row.defaultModelSelection,
     defaultThreadEnvMode: row.defaultThreadEnvMode,
     autoPull: row.autoPull,
+    orchestratorThreadId: row.orchestratorThreadId,
     faviconPath: row.faviconPath,
     projectIcon: row.projectIcon,
     scripts: row.scripts,
@@ -117,6 +120,7 @@ export const make = Effect.gen(function* () {
         default_model_selection_json AS "defaultModelSelection",
         default_thread_env_mode AS "defaultThreadEnvMode",
         auto_pull AS "autoPull",
+        orchestrator_thread_id AS "orchestratorThreadId",
         favicon_path AS "faviconPath",
         project_icon_json AS "projectIcon",
         scripts_json AS "scripts",
@@ -147,6 +151,7 @@ export const make = Effect.gen(function* () {
             default_model_selection_json,
             default_thread_env_mode,
             auto_pull,
+            orchestrator_thread_id,
             favicon_path,
             project_icon_json,
             scripts_json,
@@ -161,6 +166,7 @@ export const make = Effect.gen(function* () {
             ${encoded.defaultModelSelection},
             ${encoded.defaultThreadEnvMode},
             ${encoded.autoPull},
+            ${encoded.orchestratorThreadId},
             ${encoded.faviconPath},
             ${encoded.projectIcon},
             ${encoded.scripts},
@@ -175,6 +181,7 @@ export const make = Effect.gen(function* () {
             default_model_selection_json = excluded.default_model_selection_json,
             default_thread_env_mode = excluded.default_thread_env_mode,
             auto_pull = excluded.auto_pull,
+            orchestrator_thread_id = excluded.orchestrator_thread_id,
             favicon_path = excluded.favicon_path,
             project_icon_json = excluded.project_icon_json,
             scripts_json = excluded.scripts_json,
@@ -223,6 +230,7 @@ export const make = Effect.gen(function* () {
           defaultModelSelection: payload.defaultModelSelection,
           defaultThreadEnvMode: payload.defaultThreadEnvMode ?? null,
           autoPull: false,
+          orchestratorThreadId: null,
           faviconPath: payload.faviconPath ?? null,
           projectIcon: payload.projectIcon ?? null,
           scripts: payload.scripts,
@@ -253,6 +261,9 @@ export const make = Effect.gen(function* () {
           ? {}
           : { defaultThreadEnvMode: payload.defaultThreadEnvMode }),
         ...(payload.autoPull === undefined ? {} : { autoPull: payload.autoPull }),
+        ...(payload.orchestratorThreadId === undefined
+          ? {}
+          : { orchestratorThreadId: payload.orchestratorThreadId }),
         ...(payload.faviconPath === undefined ? {} : { faviconPath: payload.faviconPath }),
         ...(payload.projectIcon === undefined ? {} : { projectIcon: payload.projectIcon }),
         ...(payload.scripts === undefined ? {} : { scripts: payload.scripts }),

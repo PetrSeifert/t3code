@@ -10,6 +10,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  ThreadId,
   TrimmedNonEmptyString,
   TrimmedString,
   type UnknownUnionMember,
@@ -159,12 +160,32 @@ export const Project = Schema.Struct({
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   // Opt-in because background sync performs network I/O and may move the checkout.
   autoPull: Schema.optional(Schema.Boolean),
+  orchestratorThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   scripts: Schema.Array(ProjectScript),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
 });
 export type Project = typeof Project.Type;
+
+/** The stored id counts only while that thread exists, belongs to the project and is not archived. */
+export function isLiveProjectOrchestrator(
+  project: {
+    readonly id: ProjectId;
+    readonly orchestratorThreadId?: ThreadId | null | undefined;
+  },
+  thread:
+    | { readonly id: ThreadId; readonly projectId: ProjectId; readonly archivedAt: unknown }
+    | null
+    | undefined,
+): boolean {
+  return (
+    thread != null &&
+    project.orchestratorThreadId === thread.id &&
+    thread.projectId === project.id &&
+    thread.archivedAt === null
+  );
+}
 
 export const ProjectSnapshot = Schema.Struct({
   projects: Schema.Array(Project),
@@ -186,6 +207,7 @@ export const ProjectUpdatePayload = Schema.Struct({
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   autoPull: Schema.optional(Schema.Boolean),
+  orchestratorThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),

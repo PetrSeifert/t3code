@@ -76,6 +76,7 @@ function makeHarness(
               defaultModelSelection: modelSelection,
               defaultThreadEnvMode: null,
               autoPull: false,
+              orchestratorThreadId: null,
               faviconPath: null,
               projectIcon: null,
               scripts: [],

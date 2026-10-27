@@ -2,9 +2,11 @@ import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { migrationManifest, runMigrations } from "./Migrations.ts";
+import ProjectionProjectsOrchestratorThread from "./Migrations/073_ProjectionProjectsOrchestratorThread.ts";
 
 const v2Migrations = migrationManifest.filter(([id]) => id >= 55);
 const newerMigrationId = Math.max(...migrationManifest.map(([id]) => id)) + 1;
@@ -120,6 +122,28 @@ describe("runMigrations", () => {
       `;
 
       assert.deepStrictEqual(yield* runMigrations(), []);
+    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+  );
+
+  it.effect("moves the fork's orchestrator thread migration off upstream's id 70", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 69 });
+      yield* Migrator.make({})({
+        loader: Migrator.fromRecord({
+          "70_ProjectionProjectsOrchestratorThread": ProjectionProjectsOrchestratorThread,
+        }),
+      });
+
+      assert.deepStrictEqual(yield* runMigrations(), [
+        [70, "PeerLinks"],
+        [71, "PeerLinkFence"],
+        [72, "WaitingLinkRequestIndex"],
+        [73, "ProjectionProjectsOrchestratorThread"],
+      ]);
+      assert.deepStrictEqual(yield* history, migrationManifest);
+      const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(projection_projects)`;
+      assert.isTrue(columns.some((column) => column.name === "orchestrator_thread_id"));
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
 });

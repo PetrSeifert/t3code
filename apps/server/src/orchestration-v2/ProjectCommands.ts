@@ -8,6 +8,7 @@ import {
   type ProjectScript,
   SCRIPT_RUN_COMMAND_PATTERN,
   type ThreadEnvMode,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Result from "effect/Result";
@@ -34,6 +35,7 @@ export interface ProjectMetaUpdateCommand {
   readonly defaultModelSelection?: ModelSelection | null;
   readonly defaultThreadEnvMode?: ThreadEnvMode | null;
   readonly autoPull?: boolean;
+  readonly orchestratorThreadId?: ThreadId | null;
   readonly faviconPath?: string | null;
   readonly projectIcon?: ProjectIconOverride | null;
   readonly scripts?: ReadonlyArray<ProjectScript>;
@@ -205,6 +207,9 @@ export function planProjectCommand(input: {
             ? {}
             : { defaultThreadEnvMode: command.defaultThreadEnvMode }),
           ...(command.autoPull === undefined ? {} : { autoPull: command.autoPull }),
+          ...(command.orchestratorThreadId === undefined
+            ? {}
+            : { orchestratorThreadId: command.orchestratorThreadId }),
           ...(command.faviconPath === undefined ? {} : { faviconPath: command.faviconPath }),
           ...(command.projectIcon === undefined ? {} : { projectIcon: command.projectIcon }),
           ...(command.scripts === undefined ? {} : { scripts: command.scripts }),

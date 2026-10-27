@@ -75,6 +75,7 @@ import Migration0069 from "./Migrations/069_ThreadMessageSearch.ts";
 import Migration0070 from "./Migrations/070_PeerLinks.ts";
 import Migration0071 from "./Migrations/071_PeerLinkFence.ts";
 import Migration0072 from "./Migrations/072_WaitingLinkRequestIndex.ts";
+import Migration0073 from "./Migrations/073_ProjectionProjectsOrchestratorThread.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -150,6 +151,7 @@ const migrationEntries = [
   [70, "PeerLinks", Migration0070],
   [71, "PeerLinkFence", Migration0071],
   [72, "WaitingLinkRequestIndex", Migration0072],
+  [73, "ProjectionProjectsOrchestratorThread", Migration0073],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -198,6 +200,20 @@ const assertV2MigrationsCanRun = Effect.fn("assertV2MigrationsCanRun")(function*
   });
 });
 
+// This fork first shipped ProjectionProjectsOrchestratorThread as 70, which upstream later took.
+// It is idempotent, so forget the old record and let it rerun as 73 after upstream's 70-72.
+const releaseForkMigrationId = Effect.fn("releaseForkMigrationId")(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'
+  `;
+  if (tables.length === 0) return;
+  yield* sql`
+    DELETE FROM effect_sql_migrations
+    WHERE migration_id = 70 AND name = 'ProjectionProjectsOrchestratorThread'
+  `;
+});
+
 const run = Migrator.make({});
 
 export interface RunMigrationsOptions {
@@ -211,6 +227,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
     toMigrationInclusive === undefined || toMigrationInclusive >= FIRST_V2_MIGRATION_ID;
   const previewMigrations = includesV2 ? yield* reconcileV2PreviewMigration() : [];
   if (includesV2) {
+    yield* releaseForkMigrationId();
     yield* assertV2MigrationsCanRun(toMigrationInclusive);
   }
   const executedMigrations = [
