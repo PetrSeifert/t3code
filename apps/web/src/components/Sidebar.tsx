@@ -1022,7 +1022,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     routeKey: routeRowThreadKey,
     isSearching: isSearchingThreads,
     scopedProjectKeys: chosenScopeProjectKeys,
-    findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
+    // Orchestrators have their own section, so opening one never widens the Threads scope.
+    findThread: (key) =>
+      orchestratorThreadKeys.has(key)
+        ? undefined
+        : threads.find((candidate) => threadShellKey(candidate) === key),
   });
   const projectScopeKey = revealWidensScope ? null : chosenProjectScopeKey;
   // The widened scope outlives the reveal, so it is written back to the persisted

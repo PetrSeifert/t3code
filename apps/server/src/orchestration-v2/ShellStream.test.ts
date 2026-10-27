@@ -231,8 +231,10 @@ describe("omitOlderSettledShells", () => {
       ...overrides,
     });
   const newest = Array.from({ length: 25 }, (_, index) => row(`new-${index}`, index / 10));
-  const omit = (threads: ReadonlyArray<OrchestrationV2ThreadShell>) =>
-    omitOlderSettledShells({ threads, snapshotSequence: 7, now });
+  const omit = (
+    threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+    orchestratorThreadIds: ReadonlySet<string> = new Set(),
+  ) => omitOlderSettledShells({ threads, orchestratorThreadIds, snapshotSequence: 7, now });
 
   it("keeps the 25 newest settled threads and counts the rest per project", () => {
     const result = omit([...newest, row("old", 30), row("b-old", 40), row("unsettled", null)]);
@@ -289,6 +291,15 @@ describe("omitOlderSettledShells", () => {
       "child",
     ]);
     expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 4 }]);
+  });
+
+  it("keeps an older settled project orchestrator, and still counts it", () => {
+    const result = omit(
+      [...newest, row("orchestrator", 30), row("old", 30)],
+      new Set(["orchestrator"]),
+    );
+    expect(result.threads.map((thread) => thread.id).slice(25)).toEqual(["orchestrator"]);
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 2 }]);
   });
 });
 
