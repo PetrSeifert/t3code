@@ -60,6 +60,17 @@ to override its environment defaults. Worktree directories keep their original n
 If generation fails, or a custom name is invalid or already taken, the temporary
 branch name remains.
 
+## Orchestrator instructions
+
+A project can name one thread as its orchestrator. That thread's agent is told it is the
+orchestrator, along with the text in **Settings → Threads → Orchestrator instructions**. The
+text is one setting per environment, shared by every project. Archiving the thread drops the
+role, and unarchiving restores it.
+
+When you mark a thread or change the text, Codex, OpenCode and ACP agents such as Grok pick it
+up on the next message. Claude picks it up when its session next starts. Cursor only gets it on
+a thread's first message. Pi, Antigravity and Muse don't get the role.
+
 ## Scheduled tasks on mobile
 
 Open **Settings → Scheduled tasks** to create recurring tasks or manage existing

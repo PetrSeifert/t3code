@@ -851,7 +851,11 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
 });
 
 describe("ClaudeAdapterV2 append-system-prompt-file launch argument", () => {
-  const startTurnWithLaunchArgs = Effect.fnUntraced(function* (launchArgs: string, cwd: string) {
+  const startTurnWithLaunchArgs = Effect.fnUntraced(function* (
+    launchArgs: string,
+    cwd: string,
+    orchestratorRole?: string,
+  ) {
     const fileSystem = yield* FileSystem.FileSystem;
     const opened: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOptions> = [];
     const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
@@ -903,8 +907,8 @@ describe("ClaudeAdapterV2 append-system-prompt-file launch argument", () => {
       runtimePolicy,
     });
     const exit = yield* runtime
-      .startTurn(
-        makeClaudeTestTurnInput({
+      .startTurn({
+        ...makeClaudeTestTurnInput({
           threadId,
           providerThread,
           now: yield* DateTime.now,
@@ -913,7 +917,8 @@ describe("ClaudeAdapterV2 append-system-prompt-file launch argument", () => {
           attachments: [],
           runtimePolicy,
         }),
-      )
+        ...(orchestratorRole === undefined ? {} : { orchestratorRole }),
+      })
       .pipe(Effect.exit);
     return { exit, opened };
   });
@@ -941,6 +946,26 @@ describe("ClaudeAdapterV2 append-system-prompt-file launch argument", () => {
         assert.isUndefined(opened[0]!.extraArgs?.["append-system-prompt"]);
         assert.isUndefined(opened[0]!.extraArgs?.["append-system-prompt-file"]);
         assert.equal(opened[0]!.extraArgs?.["system-prompt"], "Replacement");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("appends the orchestrator role only to the orchestrator thread's session", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-claude-role-cwd-" });
+        const plain = yield* startTurnWithLaunchArgs("", cwd);
+        const role = yield* startTurnWithLaunchArgs("", cwd, "## Orchestrator thread");
+        assert.notInclude(appendSystemPrompt(plain.opened[0]) ?? "", "Orchestrator thread");
+        assert.equal(
+          appendSystemPrompt(role.opened[0]),
+          `${appendSystemPrompt(plain.opened[0])}\n\n## Orchestrator thread`,
+        );
       }).pipe(
         Effect.provide(
           Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),

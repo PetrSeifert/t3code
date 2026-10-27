@@ -1,6 +1,7 @@
 import { makeAssistantStreamingFilter } from "./assistantStreaming.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import {
+  isLiveProjectOrchestrator,
   isOrchestrationV2WorkActive,
   CommandId,
   type EventId,
@@ -32,6 +33,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
@@ -45,7 +47,9 @@ import * as CheckpointService from "./CheckpointService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import { buildOrchestratorRoleSection } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import type { ProjectionStoreV2Error } from "./ProjectionStore.ts";
 import {
   makeProviderFailure,
@@ -595,6 +599,7 @@ export const layer: Layer.Layer<
   | IdAllocator.IdAllocatorV2
   | ProviderEventIngestor.ProviderEventIngestorV2
   | ServerSettings.ServerSettingsService
+  | ProjectStore.ProjectStoreV2
   | McpAppModelContext.McpAppModelContext
   | PreviewAgentActivity.PreviewAgentActivity
   | TurnItemPositionStore.TurnItemPositionStoreV2
@@ -607,10 +612,35 @@ export const layer: Layer.Layer<
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
     const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
+    const projects = yield* ProjectStore.ProjectStoreV2;
     const mcpAppModelContext = yield* McpAppModelContext.McpAppModelContext;
     const previewAgentActivity = yield* PreviewAgentActivity.PreviewAgentActivity;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
     const finalizationObserver = yield* RunFinalizationService.RunFinalizationObserver;
+
+    const resolveOrchestratorRole = Effect.fn("RunExecutionService.resolveOrchestratorRole")(
+      function* (thread: OrchestrationV2AppThread) {
+        const project = yield* projects.get(thread.projectId);
+        if (
+          Option.isNone(project) ||
+          !isLiveProjectOrchestrator(
+            {
+              id: project.value.projectId,
+              orchestratorThreadId: project.value.orchestratorThreadId,
+            },
+            thread,
+          )
+        ) {
+          return undefined;
+        }
+        const settings = yield* serverSettings.getSettings;
+        return buildOrchestratorRoleSection({
+          projectTitle: project.value.title,
+          threadId: thread.id,
+          instructions: settings.orchestratorInstructions,
+        });
+      },
+    );
 
     const writeFinalRunEvents = Effect.fn("RunExecutionService.writeFinalRunEvents")(
       function* (input: {
@@ -1627,6 +1657,13 @@ export const layer: Layer.Layer<
           key: `mcp_app_${entry.itemId.replace(/[^\w.-]/g, "_")}`,
           text: entry.text,
         }));
+        const orchestratorRole = yield* resolveOrchestratorRole(input.appThread).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Failed to resolve the orchestrator role.", { cause }).pipe(
+              Effect.as(undefined),
+            ),
+          ),
+        );
         const turnInput = {
           appThread: input.appThread,
           threadId: input.run.threadId,
@@ -1648,6 +1685,7 @@ export const layer: Layer.Layer<
           modelSelection: input.modelSelection,
           runtimePolicy: input.runtimePolicy,
           ...(appContext.length === 0 ? {} : { appContext }),
+          ...(orchestratorRole === undefined ? {} : { orchestratorRole }),
         };
         // Check after the context read: ingestion can settle the run while
         // it awaits. A failed ownership read fails the start below.
