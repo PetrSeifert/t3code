@@ -1020,8 +1020,7 @@ describe("AcpAdapterV2", () => {
       const stillMarked = yield* runTurn(8, defaultPolicy, "Keep going.", role);
       assert.notInclude(stillMarked.prompt, "<t3_code_instructions>");
       const unmarked = yield* runTurn(9, defaultPolicy, "Back to normal.");
-      assert.include(unmarked.prompt, "<t3_code_instructions>");
-      assert.notInclude(unmarked.prompt, role);
+      assert.include(unmarked.prompt, "no longer its project's orchestrator");
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 

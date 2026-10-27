@@ -59,6 +59,11 @@ const T3_CODE_ACP_PLAN_MODE_INSTRUCTIONS = `## T3 Code interaction mode: Plan
 
 Investigate with read-only actions and do not edit files or otherwise execute the implementation. Resolve discoverable facts before asking questions. When the requirements are decision complete, return a concrete implementation plan and do not start implementing it. Treat this mode as active until T3 Code supplies a different interaction-mode instruction.`;
 
+// The earlier role stays in ACP history, so dropping it must be said out loud.
+const T3_CODE_ACP_ORCHESTRATOR_REVOKED_INSTRUCTIONS = `## Orchestrator thread
+
+This thread is no longer its project's orchestrator. Ignore the earlier orchestrator instructions.`;
+
 export interface T3AcpInstructionState {
   readonly interactionMode: ProviderInteractionMode;
   readonly hasT3Mcp: boolean;
@@ -91,7 +96,11 @@ export function t3AcpPromptWithInstructions(input: {
           T3_CODE_ACP_MCP_FALLBACK_INSTRUCTIONS,
         ]
       : []),
-    ...(input.state.orchestratorRole === undefined ? [] : [input.state.orchestratorRole]),
+    ...(input.state.orchestratorRole !== undefined
+      ? [input.state.orchestratorRole]
+      : input.previousState?.orchestratorRole !== undefined
+        ? [T3_CODE_ACP_ORCHESTRATOR_REVOKED_INSTRUCTIONS]
+        : []),
   ];
   return `<t3_code_instructions>\n${instructions.join("\n\n")}\n</t3_code_instructions>\n\n<user_request>\n${input.prompt}\n</user_request>`;
 }
