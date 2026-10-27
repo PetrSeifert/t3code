@@ -69,11 +69,13 @@ export function buildProjectSearchItems(input: ProjectItemsInput) {
   });
 }
 
-/** Projects as targets of the "New thread in..." submenu. */
-export function buildNewThreadInProjectItems(input: ProjectItemsInput) {
+/** Projects as targets of the "New thread in..." and "New orchestrator..." submenus. */
+export function buildNewThreadInProjectItems(
+  input: ProjectItemsInput & { readonly valuePrefix?: string },
+) {
   return buildProjectActionItems({
     projects: input.projects,
-    valuePrefix: "new-thread-in",
+    valuePrefix: input.valuePrefix ?? "new-thread-in",
     searchTerms: (project) => {
       const group = input.projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
       const location = input.locationByEnvironmentId.get(project.environmentId);
