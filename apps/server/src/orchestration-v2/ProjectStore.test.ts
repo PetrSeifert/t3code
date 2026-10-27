@@ -1,5 +1,11 @@
 import { assert, it } from "@effect/vitest";
-import { EventId, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  type ApplicationProjectEvent,
+  EventId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -48,6 +54,67 @@ it.layer(ProjectStore.layer.pipe(Layer.provideMerge(SqlitePersistence.layerMemor
         assert.deepStrictEqual(
           Option.getOrNull(yield* projects.get(projectId))?.defaultModelSelection,
           modelSelection,
+        );
+      }),
+    );
+
+    it.effect("rebuilds the orchestrator thread from replayed project events", () =>
+      Effect.gen(function* () {
+        const projects = yield* ProjectStore.ProjectStoreV2;
+        const sql = yield* SqlClient.SqlClient;
+        const projectId = ProjectId.make("project-orchestrator-replay");
+        const orchestratorThreadId = ThreadId.make("thread-orchestrator-replay");
+        const base = {
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: "2026-03-24T00:00:00.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+        } as const;
+        const events: ReadonlyArray<ApplicationProjectEvent> = [
+          {
+            ...base,
+            sequence: 1,
+            eventId: EventId.make("event-orchestrator-created"),
+            type: "project.created",
+            payload: {
+              projectId,
+              title: "Orchestrated",
+              workspaceRoot: "/tmp/project-orchestrator-replay",
+              defaultModelSelection: null,
+              scripts: [],
+              createdAt: base.occurredAt,
+              updatedAt: base.occurredAt,
+            },
+          },
+          {
+            ...base,
+            sequence: 2,
+            eventId: EventId.make("event-orchestrator-set"),
+            type: "project.meta-updated",
+            payload: { projectId, orchestratorThreadId, updatedAt: base.occurredAt },
+          },
+          {
+            ...base,
+            sequence: 3,
+            eventId: EventId.make("event-orchestrator-renamed"),
+            type: "project.meta-updated",
+            payload: { projectId, title: "Renamed", updatedAt: base.occurredAt },
+          },
+        ];
+        const replay = Effect.forEach(events, projects.apply, { discard: true });
+
+        yield* replay;
+        const before = Option.getOrThrow(yield* projects.get(projectId));
+        assert.strictEqual(before.orchestratorThreadId, orchestratorThreadId);
+        yield* sql`DELETE FROM projection_projects WHERE project_id = ${projectId}`;
+        yield* replay;
+        assert.deepStrictEqual(Option.getOrThrow(yield* projects.get(projectId)), before);
+        assert.strictEqual(
+          Option.getOrThrow(yield* projects.getShell(projectId)).orchestratorThreadId,
+          orchestratorThreadId,
         );
       }),
     );

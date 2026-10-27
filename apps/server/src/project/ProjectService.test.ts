@@ -3,7 +3,16 @@ import * as Queue from "effect/Queue";
 import * as Tracer from "effect/Tracer";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { CommandId, type Project, ProjectId, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  CommandId,
+  EventId,
+  type OrchestrationV2AppThread,
+  type Project,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -738,3 +747,109 @@ it.effect("rejects an update that waited on the lock while its project was delet
     );
   }).pipe(Effect.provide(layerProjectServiceDependencies)),
 );
+
+it.effect("sets, clears and validates a project's orchestrator thread", () =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const sql = yield* SqlClient.SqlClient;
+    const service = yield* ProjectService.make;
+    const projectId = ProjectId.make("project:orchestrated");
+    const otherProjectId = ProjectId.make("project:orchestrated:other");
+    const orchestratorId = ThreadId.make("thread:orchestrator");
+    const foreignId = ThreadId.make("thread:orchestrator:foreign");
+    for (const [id, workspaceRoot] of [
+      [projectId, "/work/orchestrated"],
+      [otherProjectId, "/work/orchestrated-other"],
+    ] as const) {
+      yield* service.create({
+        commandId: CommandId.make(`command:create:${id}`),
+        projectId: id,
+        title: id,
+        workspaceRoot,
+      });
+    }
+    yield* eventSink.write({
+      events: [threadCreated(projectId, orchestratorId), threadCreated(otherProjectId, foreignId)],
+    });
+
+    const set = yield* service.update({
+      commandId: CommandId.make("command:orchestrator:set"),
+      projectId,
+      orchestratorThreadId: orchestratorId,
+    });
+    assert.equal(set.orchestratorThreadId, orchestratorId);
+    const renamed = yield* service.update({
+      commandId: CommandId.make("command:orchestrator:rename"),
+      projectId,
+      title: "Renamed",
+    });
+    assert.equal(renamed.orchestratorThreadId, orchestratorId);
+    const stored = yield* sql<{ readonly orchestratorThreadId: string | null }>`
+      SELECT json_extract(payload_json, '$.orchestratorThreadId') AS "orchestratorThreadId"
+      FROM orchestration_events
+      WHERE command_id = 'command:orchestrator:set'
+    `;
+    assert.deepEqual(stored, [{ orchestratorThreadId: orchestratorId }]);
+
+    for (const [name, threadId] of [
+      ["foreign", foreignId],
+      ["missing", ThreadId.make("thread:orchestrator:missing")],
+    ] as const) {
+      const rejected = yield* service
+        .update({
+          commandId: CommandId.make(`command:orchestrator:${name}`),
+          projectId,
+          orchestratorThreadId: threadId,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(rejected, ProjectService.ProjectOrchestratorThreadError);
+    }
+    assert.equal(
+      Option.getOrThrow(yield* service.getById(projectId)).orchestratorThreadId,
+      orchestratorId,
+    );
+
+    const cleared = yield* service.update({
+      commandId: CommandId.make("command:orchestrator:clear"),
+      projectId,
+      orchestratorThreadId: null,
+    });
+    assert.isNull(cleared.orchestratorThreadId);
+  }).pipe(Effect.provide(layerProjectServiceDependencies)),
+);
+
+function threadCreated(projectId: ProjectId, threadId: ThreadId) {
+  const createdAt = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
+  const providerInstanceId = ProviderInstanceId.make("codex");
+  const payload: OrchestrationV2AppThread = {
+    createdBy: "user",
+    creationSource: "web",
+    id: threadId,
+    projectId,
+    title: threadId,
+    providerInstanceId,
+    modelSelection: { instanceId: providerInstanceId, model: "gpt-5" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: null,
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
+    forkedFrom: null,
+    createdAt,
+    updatedAt: createdAt,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  };
+  return {
+    id: EventId.make(`created:${threadId}`),
+    type: "thread.created" as const,
+    threadId,
+    providerInstanceId,
+    occurredAt: createdAt,
+    payload,
+  };
+}
