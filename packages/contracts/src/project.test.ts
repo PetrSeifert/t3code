@@ -5,7 +5,9 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationProjectShell } from "./orchestrationProject.ts";
 
+import { ProjectId, ThreadId } from "./baseSchemas.ts";
 import {
+  isLiveProjectOrchestrator,
   ProjectFaviconPath,
   ReceivedProjectIcon,
   StoredProjectIcon,
@@ -177,3 +179,25 @@ effectIt.effect("an icon kind from a newer server shows the default icon", () =>
     assert.strictEqual(broken._tag, "Failure");
   }),
 );
+
+describe("isLiveProjectOrchestrator", () => {
+  const projectId = ProjectId.make("project-live");
+  const threadId = ThreadId.make("thread-orchestrator");
+  const project = { id: projectId, orchestratorThreadId: threadId };
+  const thread = { id: threadId, projectId, archivedAt: null };
+
+  it("holds only for the project's own unarchived orchestrator thread", () => {
+    expect(isLiveProjectOrchestrator(project, thread)).toBe(true);
+    expect(isLiveProjectOrchestrator(project, { ...thread, archivedAt: "2026-01-01" })).toBe(false);
+    expect(isLiveProjectOrchestrator(project, undefined)).toBe(false);
+    expect(
+      isLiveProjectOrchestrator(project, { ...thread, projectId: ProjectId.make("project-other") }),
+    ).toBe(false);
+    expect(
+      isLiveProjectOrchestrator(project, { ...thread, id: ThreadId.make("thread-worker") }),
+    ).toBe(false);
+    expect(isLiveProjectOrchestrator({ ...project, orchestratorThreadId: null }, thread)).toBe(
+      false,
+    );
+  });
+});

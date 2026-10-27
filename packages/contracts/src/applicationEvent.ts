@@ -9,6 +9,7 @@ import {
   NonNegativeInt,
   ProjectId,
   ProviderItemId,
+  ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import { RepositoryIdentity, ThreadEnvMode } from "./environment.ts";
@@ -57,6 +58,7 @@ export const ApplicationProjectMetaUpdatedPayload = Schema.Struct({
   // Absent = leave unchanged; null = clear the override.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
   autoPull: Schema.optional(Schema.Boolean),
+  orchestratorThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   faviconPath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   projectIcon: Schema.optional(Schema.NullOr(StoredProjectIcon)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),

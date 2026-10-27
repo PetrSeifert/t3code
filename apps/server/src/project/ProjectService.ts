@@ -6,7 +6,7 @@ import {
   type ProjectCreatePayload,
   type ProjectUpdatePayload,
   type ProjectSnapshot,
-  type ThreadId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import * as Context from "effect/Context";
@@ -84,6 +84,15 @@ export class ProjectNotEmptyError extends Schema.TaggedError<ProjectNotEmptyErro
   }
 }
 
+export class ProjectOrchestratorThreadError extends Schema.TaggedError<ProjectOrchestratorThreadError>()(
+  "ProjectOrchestratorThreadError",
+  { projectId: ProjectId, threadId: ThreadId },
+) {
+  override get message(): string {
+    return `Thread ${this.threadId} is not a thread of project ${this.projectId}.`;
+  }
+}
+
 export class ProjectOperationError extends Schema.TaggedError<ProjectOperationError>()(
   "ProjectOperationError",
   {
@@ -92,6 +101,7 @@ export class ProjectOperationError extends Schema.TaggedError<ProjectOperationEr
       "read-project",
       "list-projects",
       "list-threads",
+      "read-thread",
       "delete-thread",
       "dispatch-project-command",
     ]),
@@ -109,6 +119,7 @@ export type ProjectServiceError =
   | ProjectNotFoundError
   | ProjectConflictError
   | ProjectNotEmptyError
+  | ProjectOrchestratorThreadError
   | ProjectOperationError;
 
 export class ProjectService extends Context.Service<
@@ -166,6 +177,7 @@ export const make = Effect.gen(function* () {
     defaultModelSelection: row.defaultModelSelection,
     defaultThreadEnvMode: row.defaultThreadEnvMode,
     autoPull: row.autoPull,
+    orchestratorThreadId: row.orchestratorThreadId,
     projectIcon: row.projectIcon,
     scripts: row.scripts,
     createdAt: row.createdAt,
@@ -351,6 +363,25 @@ export const make = Effect.gen(function* () {
       if (Option.isNone(existing)) {
         return yield* new ProjectNotFoundError({ projectId: input.projectId });
       }
+      const orchestratorThreadId = input.orchestratorThreadId;
+      if (orchestratorThreadId !== undefined && orchestratorThreadId !== null) {
+        const thread = yield* threadProjections.getThreadShell(orchestratorThreadId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ProjectOperationError({
+                operation: "read-thread",
+                projectId: input.projectId,
+                cause,
+              }),
+          ),
+        );
+        if (thread === null || thread.projectId !== input.projectId) {
+          return yield* new ProjectOrchestratorThreadError({
+            projectId: input.projectId,
+            threadId: orchestratorThreadId,
+          });
+        }
+      }
       const previousRoot = existing.value.workspaceRoot;
       const workspaceRoot =
         input.workspaceRoot === undefined
@@ -369,6 +400,7 @@ export const make = Effect.gen(function* () {
           ? {}
           : { defaultModelSelection: input.defaultModelSelection }),
         ...(input.autoPull === undefined ? {} : { autoPull: input.autoPull }),
+        ...(orchestratorThreadId === undefined ? {} : { orchestratorThreadId }),
         ...(input.projectIcon === undefined ? {} : { projectIcon: input.projectIcon }),
         ...(input.faviconPath === undefined ? {} : { faviconPath: input.faviconPath }),
         ...(input.defaultThreadEnvMode === undefined
