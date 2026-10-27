@@ -62,6 +62,7 @@ import {
   FolderPlusIcon,
   MessageSquareDashedIcon,
   LinkIcon,
+  NetworkIcon,
   MessageSquareIcon,
   PaletteIcon,
   RotateCcwIcon,
@@ -108,6 +109,11 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
 import { useScratchProject } from "../hooks/useScratchProject";
 import { useNewProject } from "../hooks/useNewProject";
+import { useProjectOrchestrator } from "../hooks/useProjectOrchestrator";
+import {
+  orderNewOrchestratorProjects,
+  resolveSidebarOrchestrators,
+} from "./sidebar/orchestrators.logic";
 import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import {
   useEnvironmentProviders,
@@ -234,6 +240,7 @@ import { threadRecentUse } from "@t3tools/shared/paletteSearch";
 const EMPTY_BROWSE_ENTRIES: FilesystemBrowseResult["entries"] = [];
 const ADD_PROJECT_ENTRY_GROUP = "add-project";
 const NEW_THREAD_IN_GROUP = "projects";
+const NEW_ORCHESTRATOR_GROUP = "orchestrator-projects";
 
 /** The submenu an open intent starts in; its groups resolve while rendering. */
 function openIntentView(intent: CommandPaletteOpenIntent | null): CommandPaletteView | null {
@@ -247,6 +254,11 @@ function openIntentView(intent: CommandPaletteOpenIntent | null): CommandPalette
       return {
         addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
         groups: [{ value: NEW_THREAD_IN_GROUP, label: "Projects", items: [] }],
+      };
+    case "new-orchestrator":
+      return {
+        addonIcon: <NetworkIcon className={ADDON_ICON_CLASS} />,
+        groups: [{ value: NEW_ORCHESTRATOR_GROUP, label: "Projects", items: [] }],
       };
     case "change-theme":
       return {
@@ -494,6 +506,7 @@ function OpenCommandPaletteDialog(props: {
   // State lags a render behind, so a repeated Enter could start a second create.
   const newProjectSubmittingRef = useRef(false);
   const createNewProject = useNewProject();
+  const { createOrchestrator } = useProjectOrchestrator();
   const cloneLookupGeneration = useRef(0);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
@@ -793,6 +806,30 @@ function OpenCommandPaletteDialog(props: {
       },
       ...projectItems.slice(noProjectIndex),
     ];
+  })();
+
+  const newOrchestratorItems = (() => {
+    const ordered = orderNewOrchestratorProjects(
+      pickerProjects.filter(
+        (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
+      ),
+      resolveSidebarOrchestrators(projects, threads),
+      (project) =>
+        projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)?.memberProjects ?? [
+          project,
+        ],
+    );
+    return buildNewThreadInProjectItems({
+      projects: ordered.map(({ project }) => project),
+      projectGroupByTargetKey,
+      locationByEnvironmentId: projectEnvironmentLocationById,
+      valuePrefix: "new-orchestrator",
+      runProject: createOrchestrator,
+    }).map((item, index) =>
+      ordered[index]?.hasOrchestrator
+        ? { ...item, disabled: true, description: "Has an orchestrator" }
+        : item,
+    );
   })();
 
   const {
@@ -1183,6 +1220,15 @@ function OpenCommandPaletteDialog(props: {
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: NEW_THREAD_IN_GROUP, label: "Projects", items: projectThreadItems }],
+    });
+    actionItems.push({
+      kind: "submenu",
+      value: "action:new-orchestrator",
+      searchTerms: ["new orchestrator", "orchestrate", "project", "manage"],
+      title: "New orchestrator...",
+      icon: <NetworkIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <NetworkIcon className={ADDON_ICON_CLASS} />,
+      groups: [{ value: NEW_ORCHESTRATOR_GROUP, label: "Projects", items: newOrchestratorItems }],
     });
   }
 
@@ -1577,11 +1623,13 @@ function OpenCommandPaletteDialog(props: {
         ? addProjectEntryGroups()
         : currentView?.groups[0]?.value === NEW_THREAD_IN_GROUP
           ? [{ value: NEW_THREAD_IN_GROUP, label: "Projects", items: projectThreadItems }]
-          : currentView?.groups[0]?.value === "themes"
-            ? changeThemeItem.groups
-            : currentView?.groups[0]?.value === "appearance"
-              ? changeAppearanceItem.groups
-              : (currentView?.groups ?? rootGroups);
+          : currentView?.groups[0]?.value === NEW_ORCHESTRATOR_GROUP
+            ? [{ value: NEW_ORCHESTRATOR_GROUP, label: "Projects", items: newOrchestratorItems }]
+            : currentView?.groups[0]?.value === "themes"
+              ? changeThemeItem.groups
+              : currentView?.groups[0]?.value === "appearance"
+                ? changeAppearanceItem.groups
+                : (currentView?.groups ?? rootGroups);
 
   const isLinkedThreadSearch =
     linkedThreadSearch?.linkedThreads !== undefined && deferredQuery === linkedThreadSearch.query;

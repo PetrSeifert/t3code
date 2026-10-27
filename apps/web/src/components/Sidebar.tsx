@@ -231,6 +231,12 @@ import {
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
 import {
+  SidebarOrchestrators,
+  type SidebarOrchestratorEntry,
+} from "./sidebar/SidebarOrchestrators";
+import { resolveSidebarOrchestrators } from "./sidebar/orchestrators.logic";
+import { useProjectOrchestrator } from "../hooks/useProjectOrchestrator";
+import {
   SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
@@ -313,6 +319,8 @@ interface SidebarThreadPartitionInput {
   readonly serverConfigs: ReadonlyMap<EnvironmentId, EnvironmentServerConfig>;
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly workingShelfEnabled: boolean;
+  /** Orchestrator threads, which the Orchestrators section lists instead. */
+  readonly excludedThreadKeys: ReadonlySet<string>;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
   // tracker's expiry version are inputs: a new key repartitions.
@@ -372,6 +380,7 @@ function useSidebarThreads(input: {
   readonly optimisticDrop: SidebarOptimisticDrop | null;
   readonly threads: readonly EnvironmentThreadShell[];
   readonly routeRowThreadKey: string | null;
+  readonly excludedThreadKeys: ReadonlySet<string>;
 }) {
   const {
     projectScopeKey,
@@ -380,6 +389,7 @@ function useSidebarThreads(input: {
     optimisticDrop,
     threads,
     routeRowThreadKey,
+    excludedThreadKeys,
   } = input;
   const workingShelfEnabled = useClientSettings((s) => s.sidebarWorkingShelfEnabled);
   const inboxReturnsVersion = useSyncExternalStore(
@@ -420,6 +430,7 @@ function useSidebarThreads(input: {
     serverConfigs,
     optimisticDrop,
     workingShelfEnabled,
+    excludedThreadKeys,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
 
@@ -520,9 +531,20 @@ function useSidebarThreads(input: {
 }
 
 function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
-  const { threads, scopedProjectKeys, serverConfigs, optimisticDrop, workingShelfEnabled } = input;
+  const {
+    threads,
+    scopedProjectKeys,
+    serverConfigs,
+    optimisticDrop,
+    workingShelfEnabled,
+    excludedThreadKeys,
+  } = input;
   const preciseNow = new Date().toISOString();
-  const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
+  const scopedVisible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys);
+  const visible =
+    excludedThreadKeys.size === 0
+      ? scopedVisible
+      : scopedVisible.filter((thread) => !excludedThreadKeys.has(threadShellKey(thread)));
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -972,6 +994,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
+  // The Orchestrators section ignores the project scope; their threads leave the list below.
+  const orchestrators = resolveSidebarOrchestrators(projects, threads);
+  const orchestratorThreadKeys = new Set(orchestrators.map((orchestrator) => orchestrator.key));
+  const { setOrchestrator } = useProjectOrchestrator();
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -996,7 +1022,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     routeKey: routeRowThreadKey,
     isSearching: isSearchingThreads,
     scopedProjectKeys: chosenScopeProjectKeys,
-    findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
+    // Orchestrators have their own section, so opening one never widens the Threads scope.
+    findThread: (key) =>
+      orchestratorThreadKeys.has(key)
+        ? undefined
+        : threads.find((candidate) => threadShellKey(candidate) === key),
   });
   const projectScopeKey = revealWidensScope ? null : chosenProjectScopeKey;
   // The widened scope outlives the reveal, so it is written back to the persisted
@@ -1138,6 +1168,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     optimisticDrop,
     threads,
     routeRowThreadKey,
+    excludedThreadKeys: orchestratorThreadKeys,
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -2366,6 +2397,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
         const isPinned = thread.pinnedAt != null;
         const snoozePresets = resolveSnoozePresets(new Date(), timestampFormat);
+        const threadProject = projectByKey.get(`${thread.environmentId}:${thread.projectId}`);
         const threadProjectGroup =
           projectGroupsRef.current.find((project) =>
             project.memberProjectRefs.some(
@@ -2406,6 +2438,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 titleRegeneration: supportsTitleRegeneration,
               },
               snoozePresets,
+              canMakeOrchestrator:
+                threadProject !== undefined &&
+                !isScratchProject(
+                  threadProject,
+                  serverConfigs.get(thread.environmentId)?.scratchWorkspaceRoot,
+                ),
             }),
             position,
           ),
@@ -2436,6 +2474,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 environmentId: threadRef.environmentId,
                 projectId: thread.projectId,
               });
+            return;
+          case "make-orchestrator":
+            await setOrchestrator(
+              scopeProjectRef(thread.environmentId, thread.projectId),
+              thread.id,
+            );
             return;
           case "new-thread-on-branch": {
             const result = await settlePromise(() =>
@@ -2597,6 +2641,35 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           default:
             return;
         }
+      })();
+    },
+  );
+
+  const handleOrchestratorContextMenu = useStableCallback(
+    (orchestrator: SidebarOrchestratorEntry, position: { x: number; y: number }) => {
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) return;
+        const { project } = orchestrator;
+        const clicked = await settlePromise(() =>
+          api.contextMenu.show(
+            [
+              {
+                id: "remove-orchestrator" as const,
+                label: "Remove orchestrator",
+                icon: "x",
+                disabled: !readEnvironmentScope(
+                  project.environmentId,
+                  AuthOrchestrationOperateScope,
+                ),
+              },
+            ],
+            position,
+          ),
+        );
+        if (clicked._tag === "Failure" || clicked.value !== "remove-orchestrator") return;
+        if (!checkThreadOperations([orchestrator.thread])) return;
+        await setOrchestrator(scopeProjectRef(project.environmentId, project.id), null);
       })();
     },
   );
@@ -2844,6 +2917,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
             />
+            {projects.length > 0 ? (
+              <SidebarOrchestrators
+                orchestrators={orchestrators}
+                projectDisplayNameByKey={projectDisplayNameByKey}
+                activeKey={routeRowThreadKey}
+                canCreate={projectGroups.length > 0}
+                onCreate={() => {
+                  if (isMobile) setOpenMobile(false);
+                  openCommandPalette({ open: "new-orchestrator" });
+                }}
+                onSelect={(orchestrator) =>
+                  navigateToThread(
+                    scopeThreadRef(orchestrator.thread.environmentId, orchestrator.thread.id),
+                  )
+                }
+                onContextMenu={handleOrchestratorContextMenu}
+              />
+            ) : null}
           </SidebarGroup>
         }
       >

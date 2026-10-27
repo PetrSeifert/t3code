@@ -5,6 +5,7 @@ export type ThreadActionMenuId =
   | "new-thread-on-branch"
   | "filter-by-project"
   | "project-settings"
+  | "make-orchestrator"
   | "pin"
   | "unpin"
   | "settle"
@@ -89,6 +90,8 @@ export interface ThreadActionMenuState {
   readonly snoozePresets: ReadonlyArray<SnoozePreset>;
   /** Guest links need their own grant, so the caller checks it instead of `canOperate`. */
   readonly canShareWithGuest?: boolean;
+  /** Scratch threads have no project to orchestrate. */
+  readonly canMakeOrchestrator?: boolean;
 }
 
 /** Local navigation, read markers, and copying remain available to read-only clients. */
@@ -212,6 +215,9 @@ export function buildThreadActionMenuItems(
       ],
     },
     { id: "project-settings", label: "Project settings", icon: "settings" },
+    ...(state.canMakeOrchestrator
+      ? [{ id: "make-orchestrator" as const, label: "Make project orchestrator", icon: "network" }]
+      : []),
     {
       id: "archive",
       label: "Archive thread",
