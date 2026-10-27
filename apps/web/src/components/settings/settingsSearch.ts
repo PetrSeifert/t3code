@@ -632,7 +632,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "orchestrator-instructions",
     title: "Orchestrator instructions",
     to: "/settings/threads",
-    scope: "project-defaults",
+    scope: "environment-defaults",
     searchTerms: ["orchestrator thread project role skill delegate workers prompt"],
   },
   {

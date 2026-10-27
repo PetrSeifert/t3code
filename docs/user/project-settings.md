@@ -63,9 +63,9 @@ branch name remains.
 ## Orchestrator instructions
 
 A project can name one thread as its orchestrator. That thread's agent is told it is the
-orchestrator, along with the text in **Settings → Threads → Orchestrator instructions**.
-Select a project to give it its own instructions. Archiving the thread drops the role, and
-unarchiving restores it.
+orchestrator, along with the text in **Settings → Threads → Orchestrator instructions**. The
+text is one setting per environment, shared by every project. Archiving the thread drops the
+role, and unarchiving restores it.
 
 When you mark a thread or change the text, Codex, OpenCode and ACP agents such as Grok pick it
 up on the next message. Claude picks it up when its session next starts. Cursor only gets it on

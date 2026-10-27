@@ -637,8 +637,7 @@ export const layer: Layer.Layer<
         return buildOrchestratorRoleSection({
           projectTitle: project.value.title,
           threadId: thread.id,
-          instructions: resolveProjectSettings(settings, thread.projectId).settings
-            .orchestratorInstructions,
+          instructions: settings.orchestratorInstructions,
         });
       },
     );
