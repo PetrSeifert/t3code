@@ -253,6 +253,12 @@ import {
   sidebarFolderRowId,
 } from "./sidebar/SidebarProjectFolderHeader";
 import {
+  SidebarOrchestrators,
+  type SidebarOrchestratorEntry,
+} from "./sidebar/SidebarOrchestrators";
+import { resolveSidebarOrchestrators } from "./sidebar/orchestrators.logic";
+import { useProjectOrchestrator } from "../hooks/useProjectOrchestrator";
+import {
   SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
@@ -339,6 +345,8 @@ interface SidebarThreadPartitionInput {
   readonly workingShelfEnabled: boolean;
   /** Boring mode: folders list active threads by the user's latest message. */
   readonly sortActiveBySend: boolean;
+  /** Orchestrator threads, which the Orchestrators section lists instead. */
+  readonly excludedThreadKeys: ReadonlySet<string>;
   // Snooze wakes, the queued-turn grace and the Working shelf's exit grace depend
   // on the clock, so the minute tick, the precise snooze-wake tick and the inbox
   // tracker's expiry version are inputs: a new key repartitions.
@@ -403,6 +411,7 @@ function useSidebarThreads(input: {
   readonly folderGroups: readonly SidebarProjectSnapshot[] | null;
   // Keeps folders with no active threads, so a project the user filtered to can start one.
   readonly keepEmptyFolders: boolean;
+  readonly excludedThreadKeys: ReadonlySet<string>;
 }) {
   const {
     projectScopeKey,
@@ -414,6 +423,7 @@ function useSidebarThreads(input: {
     routeRowThreadKey,
     folderGroups,
     keepEmptyFolders: keepEmpty,
+    excludedThreadKeys,
   } = input;
   // Folders already separate the work, so boring mode has no Working shelf.
   const workingShelfEnabled =
@@ -461,6 +471,7 @@ function useSidebarThreads(input: {
     optimisticDrop,
     workingShelfEnabled,
     sortActiveBySend: folderGroups !== null,
+    excludedThreadKeys,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
   });
 
@@ -596,9 +607,18 @@ function partitionSidebarThreads(input: SidebarThreadPartitionInput) {
     optimisticDrop,
     workingShelfEnabled,
     sortActiveBySend,
+    excludedThreadKeys,
   } = input;
   const preciseNow = new Date().toISOString();
-  const visible = filterSidebarV2VisibleThreads(threads, scopedProjectKeys, delegatedUnderParent);
+  const scopedVisible = filterSidebarV2VisibleThreads(
+    threads,
+    scopedProjectKeys,
+    delegatedUnderParent,
+  );
+  const visible =
+    excludedThreadKeys.size === 0
+      ? scopedVisible
+      : scopedVisible.filter((thread) => !excludedThreadKeys.has(threadShellKey(thread)));
   const inboxObservation = inboxReturns.observe(workingShelfEnabled ? threads : null);
   const pinned: EnvironmentThreadShell[] = [];
   const active: EnvironmentThreadShell[] = [];
@@ -1065,6 +1085,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
   const threads = useQuietThreadShells();
+  // The Orchestrators section ignores the project scope; their threads leave the list below.
+  const orchestrators = resolveSidebarOrchestrators(projects, threads);
+  const orchestratorThreadKeys = new Set(orchestrators.map((orchestrator) => orchestrator.key));
+  const { setOrchestrator } = useProjectOrchestrator();
   const routeRowThreadKey =
     routeThreadRef === null
       ? null
@@ -1090,7 +1114,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     isSearching: isSearchingThreads,
     scopedProjectKeys: chosenScopeProjectKeys,
     delegatedUnderParent,
-    findThread: (key) => threads.find((candidate) => threadShellKey(candidate) === key),
+    // Orchestrators have their own section, so opening one never widens the Threads scope.
+    findThread: (key) =>
+      orchestratorThreadKeys.has(key)
+        ? undefined
+        : threads.find((candidate) => threadShellKey(candidate) === key),
   });
   const projectScopeKeys = revealWidensScope ? [] : chosenProjectScopeKeys;
   const projectScopeKey = projectScopeKeys.length === 0 ? null : projectScopeKeys.join("\n");
@@ -1282,6 +1310,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         : scopedProjectGroups
       : null,
     keepEmptyFolders: scopedProjectGroups.length > 0,
+    excludedThreadKeys: orchestratorThreadKeys,
   });
 
   // Ranked across environments as the palette ranks them, so one
@@ -2526,6 +2555,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           timestampFormat,
           thread.environmentId,
         );
+        const threadProject = projectByKey.get(`${thread.environmentId}:${thread.projectId}`);
         const threadProjectGroup =
           projectGroupsRef.current.find((project) =>
             project.memberProjectRefs.some(
@@ -2566,6 +2596,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 titleRegeneration: configLoaded,
               },
               snoozePresets,
+              canMakeOrchestrator:
+                threadProject !== undefined &&
+                !isScratchProject(
+                  threadProject,
+                  serverConfigs.get(thread.environmentId)?.scratchWorkspaceRoot,
+                ),
             }),
             position,
           ),
@@ -2601,6 +2637,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 environmentId: threadRef.environmentId,
                 projectId: thread.projectId,
               });
+            return;
+          case "make-orchestrator":
+            await setOrchestrator(
+              scopeProjectRef(thread.environmentId, thread.projectId),
+              thread.id,
+            );
             return;
           case "new-thread-on-branch": {
             const result = await settlePromise(() =>
@@ -2765,6 +2807,35 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           default:
             return;
         }
+      })();
+    },
+  );
+
+  const handleOrchestratorContextMenu = useStableCallback(
+    (orchestrator: SidebarOrchestratorEntry, position: { x: number; y: number }) => {
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) return;
+        const { project } = orchestrator;
+        const clicked = await settlePromise(() =>
+          api.contextMenu.show(
+            [
+              {
+                id: "remove-orchestrator" as const,
+                label: "Remove orchestrator",
+                icon: "x",
+                disabled: !readEnvironmentScope(
+                  project.environmentId,
+                  AuthOrchestrationOperateScope,
+                ),
+              },
+            ],
+            position,
+          ),
+        );
+        if (clicked._tag === "Failure" || clicked.value !== "remove-orchestrator") return;
+        if (!checkThreadOperations([orchestrator.thread])) return;
+        await setOrchestrator(scopeProjectRef(project.environmentId, project.id), null);
       })();
     },
   );
@@ -3058,6 +3129,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               activeSearchResultIndex={activeSearchResultIndex}
               onClearSearch={clearThreadSearch}
             />
+            {projects.length > 0 ? (
+              <SidebarOrchestrators
+                orchestrators={orchestrators}
+                projectDisplayNameByKey={projectDisplayNameByKey}
+                activeKey={routeRowThreadKey}
+                canCreate={projectGroups.length > 0}
+                onCreate={() => {
+                  if (isMobile) setOpenMobile(false);
+                  openCommandPalette({ open: "new-orchestrator" });
+                }}
+                onSelect={(orchestrator) =>
+                  navigateToThread(
+                    scopeThreadRef(orchestrator.thread.environmentId, orchestrator.thread.id),
+                  )
+                }
+                onContextMenu={handleOrchestratorContextMenu}
+              />
+            ) : null}
           </SidebarGroup>
         }
       >

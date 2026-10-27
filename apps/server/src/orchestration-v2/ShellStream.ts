@@ -122,6 +122,8 @@ const NEWEST_SETTLED_KEPT = 25;
  */
 export function omitOlderSettledShells(input: {
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
+  /** Project orchestrators stay so the sidebar can always show them. */
+  readonly orchestratorThreadIds: ReadonlySet<string>;
   readonly snapshotSequence: number;
   readonly now: DateTime.Utc;
 }): {
@@ -154,7 +156,8 @@ export function omitOlderSettledShells(input: {
       thread.pinnedAt != null ||
       (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
       isLiveSubagentShell(thread) ||
-      ancestorIds.has(thread.id)
+      ancestorIds.has(thread.id) ||
+      input.orchestratorThreadIds.has(thread.id)
     );
   });
   return {
@@ -191,6 +194,11 @@ export function shellSnapshotForSubscriber(
   }
   const older = omitOlderSettledShells({
     threads: rows.threads,
+    orchestratorThreadIds: new Set(
+      base.projects.flatMap((project) =>
+        project.orchestratorThreadId == null ? [] : [project.orchestratorThreadId],
+      ),
+    ),
     snapshotSequence: base.snapshotSequence,
     now: options.now,
   });
