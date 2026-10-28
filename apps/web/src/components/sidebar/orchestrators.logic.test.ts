@@ -149,7 +149,7 @@ describe("orderNewOrchestratorProjects", () => {
     const orchestrators = resolveSidebarOrchestrators(projects, [makeThread("orch-a")]);
 
     expect(
-      orderNewOrchestratorProjects(projects, orchestrators, (project) => [project]).map((entry) => [
+      orderNewOrchestratorProjects(projects, orchestrators).map((entry) => [
         entry.project.id,
         entry.hasOrchestrator,
       ]),
@@ -161,18 +161,19 @@ describe("orderNewOrchestratorProjects", () => {
     ]);
   });
 
-  it("disables a grouped project when another member has the orchestrator", () => {
-    const member = makeProject("project-b", "orch-b", "env-b");
-    const target = makeProject("project-a", null);
-    const orchestrators = resolveSidebarOrchestrators(
-      [member],
-      [makeThread("orch-b", { projectId: "project-b", environmentId: "env-b" })],
-    );
+  it("keeps another environment's copy of a project available", () => {
+    const laptop = makeProject("project-a", "orch-a", "env-a");
+    const server = makeProject("project-a", null, "env-b");
+    const orchestrators = resolveSidebarOrchestrators([laptop, server], [makeThread("orch-a")]);
 
     expect(
-      orderNewOrchestratorProjects([target], orchestrators, () => [target, member]).map(
-        (entry) => entry.hasOrchestrator,
-      ),
-    ).toEqual([true]);
+      orderNewOrchestratorProjects([laptop, server], orchestrators).map((entry) => [
+        entry.project.environmentId,
+        entry.hasOrchestrator,
+      ]),
+    ).toEqual([
+      ["env-b", false],
+      ["env-a", true],
+    ]);
   });
 });

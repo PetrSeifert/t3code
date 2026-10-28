@@ -35,6 +35,7 @@ function clampListHeight(height: number): number {
 export function SidebarOrchestrators(props: {
   readonly orchestrators: ReadonlyArray<SidebarOrchestratorEntry>;
   readonly projectDisplayNameByKey: ReadonlyMap<string, string>;
+  readonly environmentLabelById: ReadonlyMap<string, string>;
   readonly activeKey: string | null;
   readonly canCreate: boolean;
   readonly onCreate: () => void;
@@ -104,6 +105,9 @@ export function SidebarOrchestrators(props: {
             style={height === null ? undefined : { height }}
           >
             {props.orchestrators.map((orchestrator) => {
+              const environmentLabel = props.environmentLabelById.get(
+                orchestrator.project.environmentId,
+              );
               const projectKey = `${orchestrator.project.environmentId}:${orchestrator.project.id}`;
               const name =
                 props.projectDisplayNameByKey.get(projectKey) ?? orchestrator.project.title;
@@ -137,6 +141,7 @@ export function SidebarOrchestrators(props: {
                         )}
                       >
                         {sidebarOrchestratorStatusLabel(orchestrator.status)}
+                        {environmentLabel ? ` · ${environmentLabel}` : null}
                       </span>
                     </span>
                   </button>
