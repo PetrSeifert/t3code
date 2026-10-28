@@ -2921,6 +2921,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               <SidebarOrchestrators
                 orchestrators={orchestrators}
                 projectDisplayNameByKey={projectDisplayNameByKey}
+                environmentLabelById={environmentLabelById}
                 activeKey={routeRowThreadKey}
                 canCreate={projectGroups.length > 0}
                 onCreate={() => {
