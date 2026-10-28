@@ -52,8 +52,6 @@ export function SidebarOrchestrators(props: {
   const listRef = useRef<HTMLUListElement | null>(null);
   const dragRef = useRef<{ pointerId: number; startY: number; startHeight: number } | null>(null);
   const height = dragHeight ?? storedHeight;
-  const spansEnvironments =
-    new Set(props.orchestrators.map(({ project }) => project.environmentId)).size > 1;
 
   const startDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || listRef.current === null) return;
@@ -107,9 +105,9 @@ export function SidebarOrchestrators(props: {
             style={height === null ? undefined : { height }}
           >
             {props.orchestrators.map((orchestrator) => {
-              const environmentLabel = spansEnvironments
-                ? props.environmentLabelById.get(orchestrator.project.environmentId)
-                : undefined;
+              const environmentLabel = props.environmentLabelById.get(
+                orchestrator.project.environmentId,
+              );
               const projectKey = `${orchestrator.project.environmentId}:${orchestrator.project.id}`;
               const name =
                 props.projectDisplayNameByKey.get(projectKey) ?? orchestrator.project.title;
