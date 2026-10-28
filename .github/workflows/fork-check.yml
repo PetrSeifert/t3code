@@ -1,0 +1,110 @@
+# This fork does not have upstream secrets or blacksmith-* runners.
+# Keep this file as the only active check; disable-inherited turns the rest off.
+name: Fork Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-check-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  disable-inherited:
+    name: Disable inherited workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Disable and cancel every workflow except this one
+        uses: actions/github-script@v8
+        env:
+          KEEP_WORKFLOW_PATH: .github/workflows/fork-check.yml
+        with:
+          script: |
+            const keepPath = process.env.KEEP_WORKFLOW_PATH;
+            const { owner, repo } = context.repo;
+            const workflows = await github.paginate(
+              github.rest.actions.listRepoWorkflows,
+              { owner, repo, per_page: 100 },
+            );
+
+            const disabled = [];
+            const skipped = [];
+            const failed = [];
+
+            for (const workflow of workflows) {
+              if (workflow.path === keepPath || workflow.state !== 'active') {
+                skipped.push(`${workflow.path} (${workflow.state})`);
+                continue;
+              }
+              try {
+                await github.rest.actions.disableWorkflow({
+                  owner,
+                  repo,
+                  workflow_id: workflow.id,
+                });
+                disabled.push(workflow.path);
+              } catch (error) {
+                failed.push(`${workflow.path}: ${error.message}`);
+              }
+            }
+
+            const cancelled = [];
+            for (const status of ['queued', 'in_progress', 'waiting', 'requested', 'pending']) {
+              const runs = await github.paginate(
+                github.rest.actions.listWorkflowRunsForRepo,
+                { owner, repo, status, per_page: 100 },
+              );
+              for (const run of runs) {
+                if (run.id === context.runId || run.path === keepPath) continue;
+                try {
+                  await github.rest.actions.cancelWorkflowRun({
+                    owner,
+                    repo,
+                    run_id: run.id,
+                  });
+                  cancelled.push(`${run.path}#${run.id}`);
+                } catch (error) {
+                  core.warning(`Could not cancel run ${run.id}: ${error.message}`);
+                }
+              }
+            }
+
+            core.info(`Disabled:\n${disabled.join('\n') || '(none)'}`);
+            core.info(`Skipped:\n${skipped.join('\n') || '(none)'}`);
+            core.info(`Cancelled runs:\n${cancelled.join('\n') || '(none)'}`);
+            if (failed.length > 0) {
+              core.setFailed(`Could not disable:\n${failed.join('\n')}`);
+            }
+
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+            !/apps/mobile/modules/t3-terminal/Vendor/**/*.a
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: ./.github/actions/setup-ci-deps
+
+      - name: Check
+        run: vp check
+
+      - name: Typecheck
+        run: vpr typecheck
