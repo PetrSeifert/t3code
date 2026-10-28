@@ -810,14 +810,16 @@ function OpenCommandPaletteDialog(props: {
 
   const newOrchestratorItems = (() => {
     const ordered = orderNewOrchestratorProjects(
-      pickerProjects.filter(
-        (project) => !isScratchProject(project, scratchWorkspaceRootFor(project.environmentId)),
-      ),
+      pickerProjects.flatMap((project) => {
+        if (isScratchProject(project, scratchWorkspaceRootFor(project.environmentId))) return [];
+        const members =
+          projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)?.memberProjects ??
+          [];
+        return members.length > 1
+          ? members.map((member) => ({ ...member, displayName: project.displayName }))
+          : [project];
+      }),
       resolveSidebarOrchestrators(projects, threads),
-      (project) =>
-        projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)?.memberProjects ?? [
-          project,
-        ],
     );
     return buildNewThreadInProjectItems({
       projects: ordered.map(({ project }) => project),

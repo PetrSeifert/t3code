@@ -102,21 +102,18 @@ export function sidebarOrchestratorStatusLabel(status: SidebarOrchestratorStatus
 
 /**
  * Picker projects that can take a new orchestrator first, in their order; the rest after.
- * A grouped picker project stands for all its members, so any member's orchestrator counts.
+ * Orchestrators are per environment, so each environment's copy of a project is its own entry.
  */
 export function orderNewOrchestratorProjects<P extends OrchestratorProject>(
   projects: ReadonlyArray<P>,
   orchestrators: ReadonlyArray<{ readonly project: OrchestratorProject }>,
-  membersOf: (project: P) => ReadonlyArray<OrchestratorProject>,
 ): { readonly project: P; readonly hasOrchestrator: boolean }[] {
   const orchestratedProjectKeys = new Set(
     orchestrators.map(({ project }) => `${project.environmentId}:${project.id}`),
   );
   const entries = projects.map((project) => ({
     project,
-    hasOrchestrator: membersOf(project).some((member) =>
-      orchestratedProjectKeys.has(`${member.environmentId}:${member.id}`),
-    ),
+    hasOrchestrator: orchestratedProjectKeys.has(`${project.environmentId}:${project.id}`),
   }));
   return [
     ...entries.filter((entry) => !entry.hasOrchestrator),
