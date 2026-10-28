@@ -62,7 +62,8 @@ branch name remains.
 
 ## Orchestrator instructions
 
-A project can name one thread as its orchestrator. That thread's agent is told it is the
+A project can name one thread as its orchestrator on each environment it lives on, so the same
+repository can have one orchestrator per machine. That thread's agent is told it is the
 orchestrator, along with the text in **Settings → Threads → Orchestrator instructions**. The
 text is one setting per environment, shared by every project. Archiving the thread drops the
 role, and unarchiving restores it.
