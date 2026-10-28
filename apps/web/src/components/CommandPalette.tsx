@@ -216,6 +216,7 @@ import {
   scrollCommandPaletteRowIntoView,
 } from "./CommandPaletteResults";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
+import { CommandPaletteMetaDot } from "./ThreadCommandSubtitle";
 import { Checkbox } from "./ui/checkbox";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
@@ -829,7 +830,17 @@ function OpenCommandPaletteDialog(props: {
       runProject: createOrchestrator,
     }).map((item, index) =>
       ordered[index]?.hasOrchestrator
-        ? { ...item, disabled: true, description: "Has an orchestrator" }
+        ? {
+            ...item,
+            disabled: true,
+            description: (
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="shrink-0">Has an orchestrator</span>
+                <CommandPaletteMetaDot />
+                {item.description}
+              </span>
+            ),
+          }
         : item,
     );
   })();
